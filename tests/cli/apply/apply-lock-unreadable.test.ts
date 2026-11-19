@@ -143,4 +143,61 @@ describe.skipIf(asRoot)("apply with an unreadable managed file", () => {
     expect(r.outcome).toBe("no-changes");
     expect(r.warnings.filter((w) => w === warningFor(bad))).toHaveLength(1);
   });
+
+  it("an idempotent re-apply with no lock drift repeats the warning each run", async () => {
+    const { bad } = setup();
+    const first = await apply({ homeDir: tmpHome });
+    expect(first.warnings).toContain(warningFor(bad));
+    for (let i = 0; i < 2; i++) {
+      const again = await apply({ homeDir: tmpHome });
+      expect(again.outcome).toBe("no-changes");
+      expect(again.lockDrift).toHaveLength(0);
+      expect(again.warnings.filter((w) => w === warningFor(bad))).toHaveLength(1);
+    }
+  });
+});
+
+// Documented limit: skip-and-warn covers paths that are not in the lock yet.
+// A file already in harness.lock that later becomes unreadable still stops
+// apply in the drift check (computeDrift reads it and throws).
+describe.skipIf(asRoot)("a locked file that becomes unreadable (documented limit)", () => {
+  function lockedHook(): { manifestPath: string; hook: string } {
+    const hook = path.join(tmpHome, "locked-hook.sh");
+    fs.writeFileSync(hook, "#!/bin/sh\necho hi\n");
+    const manifestPath = path.join(tmpHome, "harness.yaml");
+    fs.writeFileSync(
+      manifestPath,
+      yamlStringify({
+        version: 1,
+        tools: { mcp: [], cli: [], skills: { enabled: [], source_dirs: [] }, builtin: { known: [] } },
+        memory: { directories: [] },
+        hooks: [
+          { name: "h", event: "SessionStart", command: hook, blocking: false, budget_ms: 30000 },
+        ],
+        policies: [],
+      }),
+    );
+    return { manifestPath, hook };
+  }
+
+  it("apply() rejects with the read error", async () => {
+    const { hook } = lockedHook();
+    await apply({ homeDir: tmpHome });
+    fs.chmodSync(hook, 0o000);
+    deniedPath = hook;
+    await expect(apply({ homeDir: tmpHome })).rejects.toThrow(/EACCES/);
+  });
+
+  it("run() apply exits 70", async () => {
+    const { manifestPath, hook } = lockedHook();
+    await apply({ homeDir: tmpHome });
+    fs.chmodSync(hook, 0o000);
+    deniedPath = hook;
+    const code = await run({
+      argv: ["apply", "--config", manifestPath],
+      stdout: () => {},
+      stderr: () => {},
+    });
+    expect(code).toBe(70);
+  });
 });

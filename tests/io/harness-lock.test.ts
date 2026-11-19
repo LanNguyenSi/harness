@@ -733,6 +733,28 @@ describe("buildLockEntriesWithWarnings: unreadable paths", () => {
       ]);
     });
 
+    it.skipIf(asRoot)(
+      "an unreadable candidate in the first source_dir warns, and the next source_dir is still tried",
+      () => {
+        const first = fixtureFile("skills-a/simplify/SKILL.md", "# a\n");
+        const second = fixtureFile("skills-b/simplify/SKILL.md", "# b\n");
+        deny(path.dirname(first));
+        const m = baseManifest({
+          tools: {
+            mcp: [],
+            cli: [],
+            skills: { enabled: ["simplify"], source_dirs: ["~/skills-a", "~/skills-b"] },
+            builtin: { known: [] },
+          },
+        });
+        const r = buildLockEntriesWithWarnings(m, { homeDir: tmpHome });
+        expect(r.entries.map((e) => e.path)).toEqual([second]);
+        expect(r.warnings).toEqual([
+          `harness.lock: cannot read ${first} (EACCES); it is not drift-checked until readable`,
+        ]);
+      },
+    );
+
     it("ENOENT (no such skill): silent, no entry", () => {
       fs.mkdirSync(path.join(tmpHome, "skills"), { recursive: true });
       expect(buildLockEntriesWithWarnings(skillManifest(), { homeDir: tmpHome })).toEqual({
@@ -812,16 +834,18 @@ describe("buildLockEntriesWithWarnings: unreadable paths", () => {
       syncBuiltinESMExports();
     });
 
-    function failReadsWith(match: string, code: string): void {
-      const real = fsCjs.readFileSync;
-      vi.spyOn(fsCjs, "readFileSync").mockImplementation(((p: unknown, ...rest: unknown[]) => {
+    function failFsWith(fn: "readFileSync" | "readdirSync", match: string, code: string): void {
+      const real = fsCjs[fn] as (...a: unknown[]) => unknown;
+      vi.spyOn(fsCjs, fn).mockImplementation(((p: unknown, ...rest: unknown[]) => {
         if (typeof p === "string" && p.includes(match)) {
           throw Object.assign(new Error(code), { code, path: p });
         }
-        return (real as (...a: unknown[]) => unknown)(p, ...rest);
-      }) as typeof fsCjs.readFileSync);
+        return real(p, ...rest);
+      }) as never);
       syncBuiltinESMExports();
     }
+    const failReadsWith = (match: string, code: string): void =>
+      failFsWith("readFileSync", match, code);
 
     it("asset: ENOENT on read is silent, EACCES on read still warns", () => {
       const script = fixtureFile("hooks/h.sh", "echo\n");
@@ -837,10 +861,22 @@ describe("buildLockEntriesWithWarnings: unreadable paths", () => {
       ]);
     });
 
-    it("memory directory file: ENOENT on read is silent", () => {
+    it("memory directory file vanishing inside the directory: the directory is left out and the file is named", () => {
+      const dir = path.join(tmpHome, "mem");
+      const file = fixtureFile("mem/x.md", "x\n");
+      failReadsWith("x.md", "ENOENT");
+      expect(buildLockEntriesWithWarnings(memManifest(dir), { homeDir: tmpHome })).toEqual({
+        entries: [],
+        warnings: [
+          `harness.lock: cannot read ${file} (ENOENT); memory directory ${dir} is not drift-checked until readable`,
+        ],
+      });
+    });
+
+    it("memory directory vanishing before it is listed (ENOENT on the directory itself): silent", () => {
       const dir = path.join(tmpHome, "mem");
       fixtureFile("mem/x.md", "x\n");
-      failReadsWith("x.md", "ENOENT");
+      failFsWith("readdirSync", "mem", "ENOENT");
       expect(buildLockEntriesWithWarnings(memManifest(dir), { homeDir: tmpHome })).toEqual({
         entries: [],
         warnings: [],

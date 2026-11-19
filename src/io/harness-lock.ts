@@ -21,10 +21,16 @@
 // leaves the entry out, but is reported as a warning naming the path and the
 // error code, so the missing entry (and the drift detection that goes with
 // it) is not silent. `buildLockEntriesWithWarnings` returns those warnings;
-// `harness apply` prints them. The lock format carries no marker for such a
+// every `harness apply` that reaches the lock build prints them until the path
+// is readable (a dry run or an apply refused earlier builds no lock). The lock format carries no marker for such a
 // path: an older release's `parseLock` rejects an unknown entry kind, so the
 // warning is the only signal. A memory directory holding one unreadable file
 // is left out as a whole, since its hash would otherwise cover a partial view.
+//
+// Limit: this skip-and-warn covers paths that are not in the lock yet. A file
+// that is already in harness.lock and later becomes unreadable still stops
+// `apply` in the drift check (`computeDrift` reads it and throws, exit 70);
+// that case is not handled here.
 //
 // `mcp[]` and `memory.router` entries with `enabled: false` are skipped: per
 // ARCHITECTURE §3, disabled MCP entries are removed from the generated
@@ -364,9 +370,12 @@ export function buildLockEntriesWithWarnings(
     try {
       entries.push(computeMemoryDirEntry(resolved));
     } catch (err) {
-      if (isAbsentError(err)) continue;
       const failed = (err as NodeJS.ErrnoException).path;
-      if (typeof failed === "string" && failed !== resolved) {
+      const insideDir = typeof failed === "string" && failed !== resolved;
+      // The directory itself vanishing is "not there"; a file that vanishes
+      // inside it leaves the directory hash unsound, so that one is named.
+      if (isAbsentError(err) && !insideDir) continue;
+      if (insideDir) {
         pushWarning(
           warnings,
           `${LOCK_BASENAME}: cannot read ${failed} (${errorCode(err)}); memory directory ${resolved} is not drift-checked until readable`,

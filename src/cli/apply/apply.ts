@@ -1180,15 +1180,17 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     // once, the next apply is clean. Without this, every subsequent
     // apply re-reports the same drift forever until something else in
     // the manifest changes.
+    // Build the lock entries on every no-changes apply, drift or not, so an
+    // unreadable managed file is named again each run until it is readable.
+    // The lock is only rewritten below when drift or a recovery needs it.
+    const noChangeBuild = buildLockEntriesWithWarnings(manifest, {
+      ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}),
+      ...(opts.project !== undefined ? { projectName: opts.project } : {}),
+    });
+    warnings.push(...noChangeBuild.warnings);
     if (lockDrift.length > 0) {
-      const refreshedBuild = buildLockEntriesWithWarnings(manifest, {
-        ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}),
-        ...(opts.project !== undefined ? { projectName: opts.project } : {}),
-      });
-      addLockWarnings(warnings, refreshedBuild.warnings);
-      const refreshed = refreshedBuild.entries;
       const refreshedWithTarget = appendTargetEntry(
-        refreshed,
+        noChangeBuild.entries,
         targetPath,
         targetContent,
         previousLock,
@@ -1196,12 +1198,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
       writeLock(lockPath, refreshedWithTarget);
     }
     if (recoveredMissingLastApply) {
-      const recoveredBuild = buildLockEntriesWithWarnings(manifest, {
-        ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}),
-        ...(opts.project !== undefined ? { projectName: opts.project } : {}),
-      });
-      addLockWarnings(warnings, recoveredBuild.warnings);
-      const refreshedMemoryDirs = collectMemoryDirSnapshots(recoveredBuild.entries);
+      const refreshedMemoryDirs = collectMemoryDirSnapshots(noChangeBuild.entries);
       writeLastApply(
         generatedDir,
         buildMergedLastApplyRecord(expected, lastApply, manifest, refreshedMemoryDirs, runtime),
@@ -1277,7 +1274,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
   const lockEntries = lockBuild.entries;
   // Assets the lock could not read are left out of it; name them in the
   // result's warnings so apply does not drop drift detection silently.
-  addLockWarnings(warnings, lockBuild.warnings);
+  warnings.push(...lockBuild.warnings);
 
   // Target write happens BEFORE the lock + .last-apply records so the
   // recorded sha matches what's actually on disk (and so a crash between
@@ -1345,12 +1342,6 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     if (targetBackupPath !== undefined) result.targetBackupPath = targetBackupPath;
   }
   return result;
-}
-
-function addLockWarnings(into: string[], lockWarnings: string[]): void {
-  for (const w of lockWarnings) {
-    if (!into.includes(w)) into.push(w);
-  }
 }
 
 function appendTargetEntry(
