@@ -29,6 +29,9 @@
 //     will want to clean it up too, but we don't touch it).
 //   - `npm uninstall -g @lannguyensi/harness` is the operator's call —
 //     uninstall prints a hint but doesn't shell out.
+//   - The Codex config (`~/.codex/config.toml`) is read-only: uninstall
+//     only detects the harness-managed hook block there (a line scan, no
+//     TOML parse) and names the removal step; it never writes the file.
 //
 // Ownership heuristics:
 //   - Hook group: every inner hook's `command` must begin with
@@ -58,6 +61,12 @@ import {
 import { GENERATED_DIRNAME } from "../../io/generated-dir.js";
 import { asPlainHarnessCommand } from "../../policy-packs/builtin/guarded-harness-command.js";
 import { resolveHomeDir as resolveHarnessStateRoot } from "../../runtime/home-dir.js";
+import {
+  CODEX_MANAGED_BEGIN,
+  CODEX_MANAGED_END,
+  CODEX_MANAGED_SOURCE_PREFIX,
+  defaultCodexConfigPath,
+} from "../apply/install-codex-config.js";
 import { parseSettingsHooks, settingsHooksRefusal } from "../gate/snapshot.js";
 import {
   backupPath,
@@ -169,6 +178,14 @@ export interface UninstallOptions {
    * world risk on its own even when `homeDir` is left at its real default.
    */
   mcpExec?: ClaudeMcpExec;
+  /**
+   * Codex config probed (read-only) for the harness-managed hook block.
+   * Same flag name as `harness apply --codex-config`. Precedence, see
+   * `resolveCodexConfigPath`: this option > derived from an explicit
+   * `homeDir` > the real `~/.codex/config.toml` only under
+   * `HARNESS_ALLOW_REAL_GENERATED_DIR=1` > the probe is skipped.
+   */
+  codexConfigPath?: string;
 }
 
 export interface HookGroupRef {
@@ -225,6 +242,18 @@ export interface UninstallInventory {
    * than guessing which names are safe to remove.
    */
   mcpRegistryReadError: string | null;
+  /**
+   * Codex config the probe resolved to (`resolveCodexConfigPath`), or null
+   * when the probe was skipped because no override was given and the real
+   * `~/.codex` is not unlocked (a warning says so).
+   */
+  codexConfigPath: string | null;
+  /**
+   * True when `codexConfigPath` holds a harness-managed hook block (a line
+   * starting with `CODEX_MANAGED_BEGIN` or `CODEX_MANAGED_SOURCE_PREFIX`).
+   * Detection only: uninstall never edits that file.
+   */
+  codexBlockPresent: boolean;
   /** Soft notices (e.g. project-local `~/.claude.json` registers grounding-mcp). */
   warnings: string[];
 }
@@ -334,6 +363,70 @@ function mcpRegistryAxisAllowed(opts: UninstallOptions): boolean {
   if (opts.homeDir !== undefined) return true;
   if (opts.mcpExec !== undefined) return true;
   return process.env["HARNESS_ALLOW_REAL_GENERATED_DIR"] === "1";
+}
+
+/**
+ * Codex config path for the read-only hook-block probe: explicit
+ * `codexConfigPath` > derived from an explicit `homeDir` (the Codex home
+ * sits next to the Claude home, the same derivation the MCP registry path
+ * uses) > the real `~/.codex/config.toml` only when
+ * `HARNESS_ALLOW_REAL_GENERATED_DIR=1` (the harness binary sets it) >
+ * null, meaning the probe is skipped so a test or library caller that
+ * supplies no override never reads the developer's real Codex config.
+ * `CODEX_HOME` is not honored, matching `harness apply`.
+ */
+function resolveCodexConfigPath(opts: UninstallOptions): string | null {
+  if (typeof opts.codexConfigPath === "string" && opts.codexConfigPath.length > 0) {
+    return opts.codexConfigPath;
+  }
+  if (opts.homeDir !== undefined) return defaultCodexConfigPath(path.dirname(opts.homeDir));
+  if (process.env["HARNESS_ALLOW_REAL_GENERATED_DIR"] === "1") return defaultCodexConfigPath();
+  return null;
+}
+
+/**
+ * Whole-line scan for the harness-managed block markers. Reads through a
+ * symlink, never writes. A missing file is "no block"; any other read
+ * failure is a warning, never a throw, because the teardown must not fail
+ * on a file it does not own.
+ */
+function probeCodexBlock(configPath: string, warnings: string[]): boolean {
+  let text: string;
+  try {
+    text = fs.readFileSync(configPath, "utf8");
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return false;
+    warnings.push(
+      `could not read ${configPath}: check it for a harness-managed block by hand (${code ?? (err as Error).message})`,
+    );
+    return false;
+  }
+  return text.split(/\r?\n/).some((line) => {
+    const t = line.trim();
+    return t.startsWith(CODEX_MANAGED_BEGIN) || t.startsWith(CODEX_MANAGED_SOURCE_PREFIX);
+  });
+}
+
+/**
+ * The manual teardown step for a Codex config that still holds the
+ * managed block. Printed before the `npm uninstall -g` hint: with the
+ * binary gone, the guarded hook line blocks every `apply_patch`.
+ */
+export function codexRemovalStep(configPath: string): string {
+  return (
+    `Codex: ${configPath} still holds the harness-managed hook block (uninstall does not edit that file).\n` +
+    `  Before \`npm uninstall -g @lannguyensi/harness\`, delete the \`${CODEX_MANAGED_SOURCE_PREFIX} Generated source: ...\` line\n` +
+    `  and every line from \`${CODEX_MANAGED_BEGIN}\` through \`${CODEX_MANAGED_END}\`, then restart Codex.\n`
+  );
+}
+
+/** The stderr line for apply and restore when the Codex block is still present. */
+export function codexBlockWarning(configPath: string): string {
+  return (
+    `${configPath} still holds a harness-managed Codex hook block; remove it by hand before ` +
+    "`npm uninstall -g @lannguyensi/harness`, or the guarded hook line will block every Codex apply_patch."
+  );
 }
 
 function resolveSettingsPath(opts: UninstallOptions, homeDir: string): string {
@@ -704,6 +797,18 @@ function buildInventory(opts: UninstallOptions): {
     );
   }
 
+  const codexConfigPath = resolveCodexConfigPath(opts);
+  let codexBlockPresent = false;
+  if (codexConfigPath === null) {
+    warnings.push(
+      "skipped the Codex hook block check: no --codex-config or --home override, so this run can't " +
+        "tell whether ~/.codex/config.toml is safe to read. Re-run with --codex-config <path>, or (for " +
+        "the real harness binary) set HARNESS_ALLOW_REAL_GENERATED_DIR=1.",
+    );
+  } else {
+    codexBlockPresent = probeCodexBlock(codexConfigPath, warnings);
+  }
+
   return {
     inventory: {
       homeDir,
@@ -719,6 +824,8 @@ function buildInventory(opts: UninstallOptions): {
       mcpRegistryPath,
       mcpRegistryServers,
       mcpRegistryReadError,
+      codexConfigPath,
+      codexBlockPresent,
       warnings,
     },
     parsed,

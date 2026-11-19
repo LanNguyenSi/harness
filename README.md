@@ -75,7 +75,7 @@ operator controls are documented in
 - [`docs/init-interactive.md`](docs/init-interactive.md): the `harness init --interactive` wizard, walkthrough and limitations.
 - [`docs/CLI.md`](docs/CLI.md): every CLI verb, grouped by purpose.
 - [`docs/policy-packs/README.md`](docs/policy-packs/README.md): the built-in policy pack (`branch-protection`).
-- [`docs/uninstall.md`](docs/uninstall.md): the single-command teardown, dry-run by default.
+- [`docs/uninstall.md`](docs/uninstall.md): the teardown, dry-run by default (Codex users remove one config block by hand).
 - [`docs/examples/full-manifest.yaml`](docs/examples/full-manifest.yaml): a schema-coverage reference (not a runnable config; its header explains why).
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): the architecture reference: manifest schema, file layout, CLI surface.
 - [`docs/VISION.md`](docs/VISION.md): why a declarative control plane, not more individual tools.
