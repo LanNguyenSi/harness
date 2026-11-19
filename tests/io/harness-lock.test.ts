@@ -1,11 +1,14 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
+import fsCjs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   LOCK_BASENAME,
   buildLockEntries,
+  buildLockEntriesWithWarnings,
   collectManifestAssetPaths,
   computeAssetEntry,
   computeDrift,
@@ -24,9 +27,21 @@ beforeEach(() => {
   tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "harness-lock-"));
 });
 
+// Paths chmod'ed to 0o000 by a test; restored before the tmp dir is removed.
+const denied: { p: string; mode: number }[] = [];
+
 afterEach(() => {
+  for (const d of denied.splice(0)) fs.chmodSync(d.p, d.mode);
   fs.rmSync(tmpHome, { recursive: true, force: true });
 });
+
+function deny(p: string): void {
+  denied.push({ p, mode: fs.statSync(p).mode & 0o777 });
+  fs.chmodSync(p, 0o000);
+}
+
+// chmod does not deny anything to root.
+const asRoot = process.getuid?.() === 0;
 
 function sha(buf: string | Buffer): string {
   return crypto.createHash("sha256").update(buf).digest("hex");
@@ -594,5 +609,286 @@ describe("readLock against externally-edited assets", () => {
     expect(drift).toHaveLength(1);
     expect(drift[0]?.entry.path).toBe(path.join(tmpHome, "hooks/git-preflight.sh"));
     expect(drift[0]?.reason).toBe("modified");
+  });
+});
+
+// Non-ENOENT/ENOTDIR stat or read failures on an asset, a skill SKILL.md
+// candidate or a memory directory leave the entry out of the lock AND name
+// the path in a warning; ENOENT and ENOTDIR stay silent.
+describe("buildLockEntriesWithWarnings: unreadable paths", () => {
+  const baseManifest = (over: Record<string, unknown>): ReturnType<typeof parseManifest> =>
+    parseManifest({
+      version: 1,
+      tools: { mcp: [], cli: [], skills: { enabled: [], source_dirs: [] }, builtin: { known: [] } },
+      memory: { directories: [] },
+      hooks: [],
+      policies: [],
+      ...over,
+    });
+
+  const hookManifest = (command: string) =>
+    baseManifest({
+      hooks: [{ name: "h", event: "SessionStart", command, blocking: false, budget_ms: 30000 }],
+    });
+
+  const skillManifest = () =>
+    baseManifest({
+      tools: {
+        mcp: [],
+        cli: [],
+        skills: { enabled: ["simplify"], source_dirs: ["~/skills"] },
+        builtin: { known: [] },
+      },
+    });
+
+  const memManifest = (dir: string) =>
+    baseManifest({ memory: { directories: [{ path: dir, scope: "project" }] } });
+
+  describe("asset", () => {
+    it.skipIf(asRoot)("EACCES on stat (parent directory not searchable): warning, no entry", () => {
+      const script = fixtureFile("hooks/h.sh", "echo\n");
+      deny(path.dirname(script));
+      const r = buildLockEntriesWithWarnings(hookManifest(script), { homeDir: tmpHome });
+      expect(r.entries).toEqual([]);
+      expect(r.warnings).toEqual([
+        `harness.lock: cannot read ${script} (EACCES); it is not drift-checked until readable`,
+      ]);
+    });
+
+    it.skipIf(asRoot)("EACCES on read (file mode 000): warning, no entry, no throw", () => {
+      const script = fixtureFile("hooks/h.sh", "echo\n");
+      deny(script);
+      const r = buildLockEntriesWithWarnings(hookManifest(script), { homeDir: tmpHome });
+      expect(r.entries).toEqual([]);
+      expect(r.warnings).toEqual([
+        `harness.lock: cannot read ${script} (EACCES); it is not drift-checked until readable`,
+      ]);
+    });
+
+    it("ELOOP (symlink loop): warning with the code, no entry", () => {
+      const a = path.join(tmpHome, "a");
+      const b = path.join(tmpHome, "b");
+      fs.symlinkSync(b, a);
+      fs.symlinkSync(a, b);
+      const r = buildLockEntriesWithWarnings(hookManifest(a), { homeDir: tmpHome });
+      expect(r.entries).toEqual([]);
+      expect(r.warnings).toEqual([
+        `harness.lock: cannot read ${a} (ELOOP); it is not drift-checked until readable`,
+      ]);
+    });
+
+    it("ENOENT: silent, no entry", () => {
+      const r = buildLockEntriesWithWarnings(hookManifest(path.join(tmpHome, "nope.sh")), {
+        homeDir: tmpHome,
+      });
+      expect(r).toEqual({ entries: [], warnings: [] });
+    });
+
+    it("ENOTDIR: silent, no entry", () => {
+      const file = fixtureFile("a-file", "x\n");
+      const r = buildLockEntriesWithWarnings(hookManifest(`${file}/child.sh`), {
+        homeDir: tmpHome,
+      });
+      expect(r).toEqual({ entries: [], warnings: [] });
+    });
+
+    it.skipIf(asRoot)("the same unreadable path named twice warns once", () => {
+      const script = fixtureFile("hooks/h.sh", "echo\n");
+      // Stat failure (not a read failure): the path is not de-duplicated by
+      // the collector's seen-set, so the warning list must do it.
+      deny(path.dirname(script));
+      const m = baseManifest({
+        hooks: [
+          { name: "h1", event: "SessionStart", command: script, blocking: false, budget_ms: 30000 },
+          { name: "h2", event: "Stop", command: script, blocking: false, budget_ms: 30000 },
+        ],
+      });
+      expect(buildLockEntriesWithWarnings(m, { homeDir: tmpHome }).warnings).toHaveLength(1);
+    });
+
+    it.skipIf(asRoot)("a readable sibling is still locked", () => {
+      const bad = fixtureFile("hooks/bad.sh", "x\n");
+      const good = fixtureFile("hooks/good.sh", "y\n");
+      deny(bad);
+      const m = baseManifest({
+        hooks: [
+          { name: "b", event: "SessionStart", command: bad, blocking: false, budget_ms: 30000 },
+          { name: "g", event: "Stop", command: good, blocking: false, budget_ms: 30000 },
+        ],
+      });
+      const r = buildLockEntriesWithWarnings(m, { homeDir: tmpHome });
+      expect(r.entries.map((e) => e.path)).toEqual([good]);
+      expect(r.warnings).toHaveLength(1);
+    });
+  });
+
+  describe("skill SKILL.md", () => {
+    it.skipIf(asRoot)("EACCES on the candidate: warning, no entry", () => {
+      const skill = fixtureFile("skills/simplify/SKILL.md", "# s\n");
+      deny(path.dirname(skill));
+      const r = buildLockEntriesWithWarnings(skillManifest(), { homeDir: tmpHome });
+      expect(r.entries).toEqual([]);
+      expect(r.warnings).toEqual([
+        `harness.lock: cannot read ${skill} (EACCES); it is not drift-checked until readable`,
+      ]);
+    });
+
+    it.skipIf(asRoot)(
+      "an unreadable candidate in the first source_dir warns, and the next source_dir is still tried",
+      () => {
+        const first = fixtureFile("skills-a/simplify/SKILL.md", "# a\n");
+        const second = fixtureFile("skills-b/simplify/SKILL.md", "# b\n");
+        deny(path.dirname(first));
+        const m = baseManifest({
+          tools: {
+            mcp: [],
+            cli: [],
+            skills: { enabled: ["simplify"], source_dirs: ["~/skills-a", "~/skills-b"] },
+            builtin: { known: [] },
+          },
+        });
+        const r = buildLockEntriesWithWarnings(m, { homeDir: tmpHome });
+        expect(r.entries.map((e) => e.path)).toEqual([second]);
+        expect(r.warnings).toEqual([
+          `harness.lock: cannot read ${first} (EACCES); it is not drift-checked until readable`,
+        ]);
+      },
+    );
+
+    it("ENOENT (no such skill): silent, no entry", () => {
+      fs.mkdirSync(path.join(tmpHome, "skills"), { recursive: true });
+      expect(buildLockEntriesWithWarnings(skillManifest(), { homeDir: tmpHome })).toEqual({
+        entries: [],
+        warnings: [],
+      });
+    });
+
+    it("ENOTDIR (source dir is a file): silent, no entry", () => {
+      fixtureFile("skills", "not a dir\n");
+      expect(buildLockEntriesWithWarnings(skillManifest(), { homeDir: tmpHome })).toEqual({
+        entries: [],
+        warnings: [],
+      });
+    });
+  });
+
+  describe("memory directory", () => {
+    it.skipIf(asRoot)("EACCES on stat (parent not searchable): warning, no entry", () => {
+      const dir = path.join(tmpHome, "outer", "mem");
+      fs.mkdirSync(dir, { recursive: true });
+      deny(path.dirname(dir));
+      const r = buildLockEntriesWithWarnings(memManifest(dir), { homeDir: tmpHome });
+      expect(r.entries).toEqual([]);
+      expect(r.warnings).toEqual([
+        `harness.lock: cannot read ${dir} (EACCES); it is not drift-checked until readable`,
+      ]);
+    });
+
+    it.skipIf(asRoot)("EACCES on listing the directory: warning, no entry, no throw", () => {
+      const dir = path.join(tmpHome, "mem");
+      fs.mkdirSync(dir);
+      deny(dir);
+      const r = buildLockEntriesWithWarnings(memManifest(dir), { homeDir: tmpHome });
+      expect(r.entries).toEqual([]);
+      expect(r.warnings).toEqual([
+        `harness.lock: cannot read ${dir} (EACCES); it is not drift-checked until readable`,
+      ]);
+    });
+
+    it.skipIf(asRoot)(
+      "listable directory holding one unreadable file: whole directory left out, warning names the file, no throw",
+      () => {
+        const dir = path.join(tmpHome, "mem");
+        fixtureFile("mem/ok.md", "ok\n");
+        const bad = fixtureFile("mem/bad.md", "bad\n");
+        deny(bad);
+        const r = buildLockEntriesWithWarnings(memManifest(dir), { homeDir: tmpHome });
+        expect(r.entries).toEqual([]);
+        expect(r.warnings).toEqual([
+          `harness.lock: cannot read ${bad} (EACCES); memory directory ${dir} is not drift-checked until readable`,
+        ]);
+      },
+    );
+
+    it("ENOENT: silent, no entry", () => {
+      const r = buildLockEntriesWithWarnings(memManifest(path.join(tmpHome, "gone")), {
+        homeDir: tmpHome,
+      });
+      expect(r).toEqual({ entries: [], warnings: [] });
+    });
+
+    it("ENOTDIR (parent is a file): silent, no entry", () => {
+      const file = fixtureFile("a-file", "x\n");
+      const r = buildLockEntriesWithWarnings(memManifest(`${file}/mem`), { homeDir: tmpHome });
+      expect(r).toEqual({ entries: [], warnings: [] });
+    });
+  });
+
+  // A path that vanishes between the stat and the read (ENOENT on the read
+  // itself) is "not there", not unreadable: no warning, no entry. The read is
+  // failed through the CommonJS fs object, whose builtin ESM exports are
+  // re-synced so the module under test sees the stub.
+  describe("a path that vanishes between stat and read", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+      syncBuiltinESMExports();
+    });
+
+    function failFsWith(fn: "readFileSync" | "readdirSync", match: string, code: string): void {
+      const real = fsCjs[fn] as (...a: unknown[]) => unknown;
+      vi.spyOn(fsCjs, fn).mockImplementation(((p: unknown, ...rest: unknown[]) => {
+        if (typeof p === "string" && p.includes(match)) {
+          throw Object.assign(new Error(code), { code, path: p });
+        }
+        return real(p, ...rest);
+      }) as never);
+      syncBuiltinESMExports();
+    }
+    const failReadsWith = (match: string, code: string): void =>
+      failFsWith("readFileSync", match, code);
+
+    it("asset: ENOENT on read is silent, EACCES on read still warns", () => {
+      const script = fixtureFile("hooks/h.sh", "echo\n");
+      failReadsWith("h.sh", "ENOENT");
+      expect(buildLockEntriesWithWarnings(hookManifest(script), { homeDir: tmpHome })).toEqual({
+        entries: [],
+        warnings: [],
+      });
+      vi.restoreAllMocks();
+      failReadsWith("h.sh", "EACCES");
+      expect(buildLockEntriesWithWarnings(hookManifest(script), { homeDir: tmpHome }).warnings).toEqual([
+        `harness.lock: cannot read ${script} (EACCES); it is not drift-checked until readable`,
+      ]);
+    });
+
+    it("memory directory file vanishing inside the directory: the directory is left out and the file is named", () => {
+      const dir = path.join(tmpHome, "mem");
+      const file = fixtureFile("mem/x.md", "x\n");
+      failReadsWith("x.md", "ENOENT");
+      expect(buildLockEntriesWithWarnings(memManifest(dir), { homeDir: tmpHome })).toEqual({
+        entries: [],
+        warnings: [
+          `harness.lock: cannot read ${file} (ENOENT); memory directory ${dir} is not drift-checked until readable`,
+        ],
+      });
+    });
+
+    it("memory directory vanishing before it is listed (ENOENT on the directory itself): silent", () => {
+      const dir = path.join(tmpHome, "mem");
+      fixtureFile("mem/x.md", "x\n");
+      failFsWith("readdirSync", "mem", "ENOENT");
+      expect(buildLockEntriesWithWarnings(memManifest(dir), { homeDir: tmpHome })).toEqual({
+        entries: [],
+        warnings: [],
+      });
+    });
+  });
+
+  it("buildLockEntries returns the same entries without the warnings", () => {
+    const script = fixtureFile("hooks/h.sh", "echo\n");
+    const m = hookManifest(script);
+    expect(buildLockEntries(m, { homeDir: tmpHome })).toEqual(
+      buildLockEntriesWithWarnings(m, { homeDir: tmpHome }).entries,
+    );
   });
 });

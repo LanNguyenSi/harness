@@ -2,7 +2,9 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { Option } from "commander";
 import { afterEach, describe, expect, it } from "vitest";
+import { buildProgram } from "../../src/cli/index.js";
 import { diff } from "../../src/cli/diff/index.js";
 import { diffManifests, formatDiff } from "../../src/cli/diff/engine.js";
 import { HarnessExitError } from "../../src/cli/exit-codes.js";
@@ -178,7 +180,31 @@ tools:
     }
     expect(caught).toBeInstanceOf(HarnessExitError);
     expect((caught as HarnessExitError).exitCode).toBe(64);
-    expect((caught as HarnessExitError).message).toMatch(/--since-apply.*Phase 3/);
+    expect((caught as HarnessExitError).message).toBe(
+      "harness diff requires --since <ref> or --since-apply",
+    );
+  });
+
+  // The usage error above must never advertise a flag the `diff` command
+  // does not actually register (it once promised "--since-apply lands in
+  // Phase 3" while --since-apply already worked): every `--flag` the
+  // message names has to be an option on the registered `diff` command.
+  it("names only options that are registered on the diff command in the usage hint", () => {
+    let message = "";
+    try {
+      diff({});
+      expect.unreachable("diff should have thrown without --since");
+    } catch (e) {
+      message = (e as HarnessExitError).message;
+    }
+    const advertised = message.match(/--[a-z][a-z0-9-]*/g) ?? [];
+    expect(advertised.length).toBeGreaterThan(0);
+    const diffCommand = buildProgram().commands.find((c) => c.name() === "diff");
+    expect(diffCommand).toBeDefined();
+    const registered = new Set((diffCommand!.options as Option[]).map((o) => o.long));
+    for (const flag of advertised) {
+      expect(registered.has(flag)).toBe(true);
+    }
   });
 
   it("exits 69 when run outside a git work tree", () => {
