@@ -33,7 +33,7 @@ import * as readline from "node:readline/promises";
 import { atomicWriteFile } from "../../io/atomic-write.js";
 import {
   LOCK_BASENAME,
-  buildLockEntries,
+  buildLockEntriesWithWarnings,
   computeDrift,
   readLock,
   writeLock,
@@ -1180,13 +1180,17 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
     // once, the next apply is clean. Without this, every subsequent
     // apply re-reports the same drift forever until something else in
     // the manifest changes.
+    // Build the lock entries on every no-changes apply, drift or not, so an
+    // unreadable managed file is named again each run until it is readable.
+    // The lock is only rewritten below when drift or a recovery needs it.
+    const noChangeBuild = buildLockEntriesWithWarnings(manifest, {
+      ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}),
+      ...(opts.project !== undefined ? { projectName: opts.project } : {}),
+    });
+    warnings.push(...noChangeBuild.warnings);
     if (lockDrift.length > 0) {
-      const refreshed = buildLockEntries(manifest, {
-        ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}),
-        ...(opts.project !== undefined ? { projectName: opts.project } : {}),
-      });
       const refreshedWithTarget = appendTargetEntry(
-        refreshed,
+        noChangeBuild.entries,
         targetPath,
         targetContent,
         previousLock,
@@ -1194,12 +1198,7 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
       writeLock(lockPath, refreshedWithTarget);
     }
     if (recoveredMissingLastApply) {
-      const refreshedMemoryDirs = collectMemoryDirSnapshots(
-        buildLockEntries(manifest, {
-          ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}),
-          ...(opts.project !== undefined ? { projectName: opts.project } : {}),
-        }),
-      );
+      const refreshedMemoryDirs = collectMemoryDirSnapshots(noChangeBuild.entries);
       writeLastApply(
         generatedDir,
         buildMergedLastApplyRecord(expected, lastApply, manifest, refreshedMemoryDirs, runtime),
@@ -1268,10 +1267,14 @@ export async function apply(opts: ApplyOptions = {}): Promise<ApplyResult> {
   // with it), which produced a half-state if the process died between
   // writes: the next `--memory-detail` diff would have seen every on-disk
   // .md as "added" against an empty index. Single write closes that gap.
-  const lockEntries = buildLockEntries(manifest, {
+  const lockBuild = buildLockEntriesWithWarnings(manifest, {
     ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}),
     ...(opts.project !== undefined ? { projectName: opts.project } : {}),
   });
+  const lockEntries = lockBuild.entries;
+  // Assets the lock could not read are left out of it; name them in the
+  // result's warnings so apply does not drop drift detection silently.
+  warnings.push(...lockBuild.warnings);
 
   // Target write happens BEFORE the lock + .last-apply records so the
   // recorded sha matches what's actually on disk (and so a crash between
@@ -1389,7 +1392,7 @@ function sha256OfFile(filePath: string): string {
 }
 
 function collectMemoryDirSnapshots(
-  lockEntries: ReturnType<typeof buildLockEntries>,
+  lockEntries: LockEntry[],
 ): Record<string, { sha256: string; fileHashes: Record<string, string> }> {
   const out: Record<string, { sha256: string; fileHashes: Record<string, string> }> = {};
   for (const e of lockEntries) {

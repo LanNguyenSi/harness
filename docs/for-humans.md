@@ -236,8 +236,15 @@ Full pack reference:
 - Do not hand-edit anything under `harness.generated/`. The next
   `apply` refuses until the edit is captured with `harness adopt` or
   discarded with `--overwrite-drift`. Edit the manifest instead.
-- Do not bypass `harness.lock` drift warnings. They are the only
-  signal that something other than `apply` touched a managed file.
+- Do not bypass `harness.lock` drift warnings. They are the signal
+  that something other than `apply` touched a managed file. A managed
+  file or memory directory that harness cannot read (permission denied,
+  a symlink loop) is not in the lock, so it cannot drift-warn; every
+  `apply` names it in a `harness.lock: cannot read <path> (<code>)`
+  warning until it is readable (a path that simply does not exist is
+  skipped without one). A file that is already in the lock and then
+  becomes unreadable still stops `apply` in the drift check (exit 70)
+  until it is readable again.
 - Do not mix `apply --target ...` with manual `cp harness.generated/
   ~/.claude/settings.json`. Pick one path.
 - Do not skip `validate` before committing. The schema catches
