@@ -20,7 +20,11 @@ type Step = {
 type Job = {
   if?: string;
   permissions?: Record<string, string>;
-  uses?: string; needs?: string | string[]; with?: Record<string, unknown>; steps?: Step[] };
+  uses?: string;
+  needs?: string | string[];
+  with?: Record<string, unknown>;
+  steps?: Step[];
+};
 type Workflow = {
   permissions?: Record<string, string>;
   concurrency?: { group?: string; "cancel-in-progress"?: unknown };
@@ -28,11 +32,26 @@ type Workflow = {
 };
 
 function load(file: string): Workflow {
-  return parse(readFileSync(join(process.cwd(), ".github/workflows", file), "utf8")) as Workflow;
+  return parse(
+    readFileSync(join(process.cwd(), ".github/workflows", file), "utf8"),
+  ) as Workflow;
 }
 
 const asList = (needs: string | string[] | undefined): string[] =>
   needs === undefined ? [] : Array.isArray(needs) ? needs : [needs];
+
+// One version table for both derivations: dist_tag_for on the publish side
+// and the prerelease flag of release.yml must classify every version alike.
+const DIST_TAG_CASES: Array<[string, string]> = [
+  ["2.1.0", ""],
+  ["2.1.0-rc.1", "next"],
+  ["2.1.0-beta.0+build.5", "next"],
+  ["2.1.0-alpha.2", "next"],
+  ["2.1.0+build.5", ""],
+  ["2.1.0+build-5", ""],
+  ["2.1.0+sha.ab-cd", ""],
+  ["2.1.0-rc.1+sha.ab-cd", "next"],
+];
 
 describe("publish-npm.yml", () => {
   const wf = load("publish-npm.yml");
@@ -45,11 +64,15 @@ describe("publish-npm.yml", () => {
   });
 
   it("publish waits for CI and for the resolve job", () => {
-    expect(asList(publish.needs)).toEqual(expect.arrayContaining(["ci", "resolve"]));
+    expect(asList(publish.needs)).toEqual(
+      expect.arrayContaining(["ci", "resolve"]),
+    );
   });
 
   it("publish checks out the resolved SHA, not the tag name", () => {
-    const checkout = publish.steps?.find((s) => s.uses?.startsWith("actions/checkout@"));
+    const checkout = publish.steps?.find((s) =>
+      s.uses?.startsWith("actions/checkout@"),
+    );
     expect(checkout?.with?.ref).toBe("${{ needs.resolve.outputs.sha }}");
   });
 
@@ -61,13 +84,17 @@ describe("publish-npm.yml", () => {
 
   it("verifies the checkout is the resolved commit before setup-node and the build", () => {
     const steps = publish.steps ?? [];
-    const verifyAt = steps.findIndex((s) => s.name === "Verify checkout is the resolved commit");
+    const verifyAt = steps.findIndex(
+      (s) => s.name === "Verify checkout is the resolved commit",
+    );
     expect(verifyAt).toBeGreaterThan(-1);
     const verify = steps[verifyAt] as Step;
     expect(verify.env?.EXPECTED_SHA).toBe("${{ needs.resolve.outputs.sha }}");
     expect(verify.run).toContain("git rev-parse HEAD");
     expect(verify.run).toMatch(/\[ "\$\{actual\}" != "\$\{EXPECTED_SHA\}" \]/);
-    const setupAt = steps.findIndex((s) => s.uses?.startsWith("actions/setup-node@"));
+    const setupAt = steps.findIndex((s) =>
+      s.uses?.startsWith("actions/setup-node@"),
+    );
     const buildAt = steps.findIndex((s) => s.run === "npm run build");
     expect(setupAt).toBeGreaterThan(verifyAt);
     expect(buildAt).toBeGreaterThan(verifyAt);
@@ -92,11 +119,15 @@ describe("publish-npm.yml", () => {
   // `latest` to a version below the highest published stable one. So a
   // prerelease must name `next` and a stable version must name no tag.
   describe("prerelease dist-tag derivation", () => {
-    const publishRun = publish.steps?.find((s) => s.name === "Publish")?.run ?? "";
+    const publishRun =
+      publish.steps?.find((s) => s.name === "Publish")?.run ?? "";
     const fnMatch = publishRun.match(/dist_tag_for\(\) \{[\s\S]*?\n\s*\}/);
 
     it("the Publish step defines the dist_tag_for shell function", () => {
-      expect(fnMatch, "dist_tag_for function in the Publish step").not.toBeNull();
+      expect(
+        fnMatch,
+        "dist_tag_for function in the Publish step",
+      ).not.toBeNull();
     });
 
     // Each version is its own case: stable (no tag), a bare prerelease,
@@ -107,29 +138,30 @@ describe("publish-npm.yml", () => {
     // which runs it identically under the workflow's bash on the runner
     // and under /bin/sh here and in CI (a bash on macOS, dash on the
     // Linux CI runner), so the derivation is shell-checked, not mocked.
-    it.each([
-      ["2.1.0", ""],
-      ["2.1.0-rc.1", "next"],
-      ["2.1.0-beta.0+build.5", "next"],
-      ["2.1.0+build.5", ""],
-      ["2.1.0+build-5", ""],
-      ["2.1.0+sha.ab-cd", ""],
-      ["2.1.0-rc.1+sha.ab-cd", "next"],
-    ])("dist_tag_for %s under sh returns %s", (version, expected) => {
-      const fn = fnMatch?.[0] ?? "dist_tag_for() { :; }";
-      const r = spawnSync("sh", ["-c", `${fn}\ndist_tag_for "${version}"`], { encoding: "utf8" });
-      expect(r.stderr).toBe("");
-      expect(r.status).toBe(0);
-      expect(r.stdout.trim()).toBe(expected);
-    });
+    it.each(DIST_TAG_CASES)(
+      "dist_tag_for %s under sh returns %s",
+      (version, expected) => {
+        const fn = fnMatch?.[0] ?? "dist_tag_for() { :; }";
+        const r = spawnSync("sh", ["-c", `${fn}\ndist_tag_for "${version}"`], {
+          encoding: "utf8",
+        });
+        expect(r.stderr).toBe("");
+        expect(r.status).toBe(0);
+        expect(r.stdout.trim()).toBe(expected);
+      },
+    );
 
     it("the Publish step derives dist_tag from the version and branches on it", () => {
       expect(publishRun).toContain('dist_tag=$(dist_tag_for "${version}")');
       expect(publishRun).toContain('if [ -z "${dist_tag}" ]; then');
-      expect(publishRun).toContain('npm publish --access public --provenance --tag "${dist_tag}"');
+      expect(publishRun).toContain(
+        'npm publish --access public --provenance --tag "${dist_tag}"',
+      );
       // The stable branch is the bare publish: no --tag at all, so npm keeps
       // its guard against moving `latest` backwards.
-      expect(publishRun).toMatch(/^ +if npm publish --access public --provenance; then$/m);
+      expect(publishRun).toMatch(
+        /^ +if npm publish --access public --provenance; then$/m,
+      );
     });
 
     // Single assignment: a fallback like `dist_tag=${dist_tag:-next}`
@@ -146,7 +178,10 @@ describe("publish-npm.yml", () => {
         for (const step of job.steps ?? []) {
           for (const line of (step.run ?? "").split("\n")) {
             if (line.includes("npm publish")) {
-              expect(line, `job ${jobName} step ${step.name ?? step.uses}`).not.toMatch(/--tag\s+latest/);
+              expect(
+                line,
+                `job ${jobName} step ${step.name ?? step.uses}`,
+              ).not.toMatch(/--tag\s+latest/);
             }
           }
         }
@@ -174,19 +209,27 @@ describe("release.yml", () => {
   const wf = load("release.yml");
   const steps = wf.jobs.release?.steps ?? [];
   const versionStep = steps.find((s) => s.id === "version") as Step;
-  const releaseStep = steps.find((s) => s.uses?.startsWith("softprops/action-gh-release@")) as Step;
+  const releaseStep = steps.find((s) =>
+    s.uses?.startsWith("softprops/action-gh-release@"),
+  ) as Step;
 
   it("the version step derives prerelease from an env-bound tag and exports it", () => {
     expect(versionStep.env?.TAG_NAME).toBe("${{ github.ref_name }}");
     // The tag reaches the script only as an environment variable: a `${{ }}`
     // spliced into the run script would make the tag value script-syntax.
     expect(versionStep.run ?? "").not.toContain("${{");
-    expect(versionStep.run).toContain('echo "version=${version}" >> "$GITHUB_OUTPUT"');
-    expect(versionStep.run).toContain('echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"');
+    expect(versionStep.run).toContain(
+      'echo "version=${version}" >> "$GITHUB_OUTPUT"',
+    );
+    expect(versionStep.run).toContain(
+      'echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"',
+    );
   });
 
   it("the release step passes the version step's prerelease output to the action", () => {
-    expect(releaseStep.with?.prerelease).toBe("${{ steps.version.outputs.prerelease }}");
+    expect(releaseStep.with?.prerelease).toBe(
+      "${{ steps.version.outputs.prerelease }}",
+    );
   });
 
   // The version step's classification: the `case` block replayed under a
@@ -194,24 +237,42 @@ describe("release.yml", () => {
   // stripped in the harness (the step's own strip line is pinned above),
   // the same rule dist_tag_for applies on the publish side, so the two
   // derivations cannot silently drift apart. The snippet is POSIX sh.
-  const classifyMatch = (versionStep.run ?? "").match(/case "\$\{version[^"]*\}" in\n[\s\S]*?\nesac/);
+  const classifyMatch = (versionStep.run ?? "").match(
+    /case "\$\{version[^"]*\}" in\n[\s\S]*?\nesac/,
+  );
 
   it("the version step carries the prerelease case block and strips the v prefix", () => {
-    expect(classifyMatch, "classification block in the version step").not.toBeNull();
+    expect(
+      classifyMatch,
+      "classification block in the version step",
+    ).not.toBeNull();
     expect(versionStep.run).toContain('version="${TAG_NAME#v}"');
   });
 
-  it.each([
-    ["v2.1.0", "false"],
-    ["v2.1.0-rc.1", "true"],
-    ["v2.1.0+build-5", "false"],
-  ])("the version step classifies %s under sh as prerelease=%s", (tag, expected) => {
-    const block = classifyMatch?.[0] ?? 'case "${version}" in\n *) prerelease=unset ;;\nesac';
-    const r = spawnSync("sh", ["-c", `TAG_NAME="${tag}"\nversion="\${TAG_NAME#v}"\n${block}\nprintf '%s' "\${prerelease}"`], { encoding: "utf8" });
-    expect(r.stderr).toBe("");
-    expect(r.status).toBe(0);
-    expect(r.stdout).toBe(expected);
-  });
+  it.each(
+    DIST_TAG_CASES.map(([v, tag]): [string, string] => [
+      `v${v}`,
+      tag === "next" ? "true" : "false",
+    ]),
+  )(
+    "the version step classifies %s under sh as prerelease=%s",
+    (tag, expected) => {
+      const block =
+        classifyMatch?.[0] ??
+        'case "${version}" in\n *) prerelease=unset ;;\nesac';
+      const r = spawnSync(
+        "sh",
+        [
+          "-c",
+          `TAG_NAME="${tag}"\nversion="\${TAG_NAME#v}"\n${block}\nprintf '%s' "\${prerelease}"`,
+        ],
+        { encoding: "utf8" },
+      );
+      expect(r.stderr).toBe("");
+      expect(r.status).toBe(0);
+      expect(r.stdout).toBe(expected);
+    },
+  );
 });
 
 describe.each(["publish-npm.yml", "release.yml"])("%s concurrency", (file) => {
