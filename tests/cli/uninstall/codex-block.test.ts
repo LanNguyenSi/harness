@@ -314,6 +314,24 @@ describe("uninstall codex hook block: CLI output", () => {
     expect(out).not.toContain("through");
   });
 
+  it("--apply with only the source line and nothing else installed uses the unfenced wording", async () => {
+    write(derivedCodex, `${CODEX_MANAGED_SOURCE_PREFIX} Generated source: /x.toml\n`);
+    const { out } = await runCli(["--apply", "--home", homeDir, "--settings", settingsPath]);
+    expect(out).toContain("nothing to remove");
+    expect(out).toContain("keep any hook tables you wrote yourself");
+    expect(out).not.toContain(CODEX_MANAGED_END);
+  });
+
+  it("--restore-from with only the source line uses the unfenced wording", async () => {
+    write(derivedCodex, `${CODEX_MANAGED_SOURCE_PREFIX} Generated source: /x.toml\n`);
+    const backup = path.join(homeDir, "settings.json.pre-harness-2026-05-11");
+    fs.writeFileSync(backup, "{}\n");
+    fs.writeFileSync(settingsPath, "{}\n");
+    const { out } = await runCli(["--restore-from", backup, "--home", homeDir, "--settings", settingsPath]);
+    expect(out).toContain("keep any hook tables you wrote yourself");
+    expect(out).not.toContain(CODEX_MANAGED_END);
+  });
+
   it("--apply with only the source line uses the same wording", async () => {
     write(derivedCodex, `${CODEX_MANAGED_SOURCE_PREFIX} Generated source: /x.toml\n`);
     fs.writeFileSync(path.join(homeDir, "harness.yaml"), "version: 1\n");
