@@ -236,8 +236,15 @@ Full pack reference:
 - Do not hand-edit anything under `harness.generated/`. The next
   `apply` refuses until the edit is captured with `harness adopt` or
   discarded with `--overwrite-drift`. Edit the manifest instead.
-- Do not bypass `harness.lock` drift warnings. They are the only
-  signal that something other than `apply` touched a managed file.
+- Do not bypass `harness.lock` drift warnings. They are the signal
+  that something other than `apply` touched a managed file. A managed
+  file or memory directory that harness cannot read (permission denied,
+  a symlink loop) is not in the lock, so it cannot drift-warn; every
+  `apply` names it in a `harness.lock: cannot read <path> (<code>)`
+  warning until it is readable (a path that simply does not exist is
+  skipped without one). A file that is already in the lock and then
+  becomes unreadable still stops `apply` in the drift check (exit 70)
+  until it is readable again.
 - Do not mix `apply --target ...` with manual `cp harness.generated/
   ~/.claude/settings.json`. Pick one path.
 - Do not skip `validate` before committing. The schema catches
@@ -264,6 +271,22 @@ harness gate enable                           # restore the live snapshot
 harness gate disable --runtime codex --matcher apply_patch  # Codex hook units
 harness gate enable  --runtime codex
 ```
+
+Which file the verbs edit: `harness apply --target <file>` writes the
+hook groups into `<file>`, so `gate disable` and `gate enable` must be
+pointed at that same file with `--settings`:
+
+```bash
+# Wired with: harness apply --target .claude/settings.local.json
+harness gate disable --matcher 'Write|Edit' --settings .claude/settings.local.json
+harness gate enable  --settings .claude/settings.local.json
+```
+
+Without `--settings` the verbs edit only `~/.claude/settings.json`: a
+`--matcher` run there reports `no hook groups matched` (or removes a
+user-scope group that carries the same matcher, if one exists, or
+reports `settings file not found` when that file does not exist)
+while the project-scope block stays live and keeps refusing.
 
 On Claude Code the verb removes the matching hook groups from
 `~/.claude/settings.json`, keeping a backup and a reversible snapshot;
@@ -353,7 +376,7 @@ removed verbs is in the removed section of
 | Schema issues, plus drift since last `apply` | `harness validate --check-lock` |
 | Health summary across all pillars (MCP probes, hook executability, memory dir state) | `harness doctor` |
 | What changed since I last ran `apply` | `harness diff --since-apply` |
-| Take one hook group out of the live config (recovery / debug / incident), Claude Code | `harness gate disable --matcher <substring>` then `harness gate enable` |
+| Take one hook group out of the live config (recovery / debug / incident), Claude Code | `harness gate disable --matcher <substring>` then `harness gate enable`; if the wiring came from `apply --target <file>`, add `--settings <file>` to both (e.g. `--settings .claude/settings.local.json`) |
 | Take one hook unit out of the live config (recovery / debug / incident), Codex | `harness gate disable --runtime codex --matcher <substring>` then `harness gate enable --runtime codex` |
 | Edit a protected branch on purpose (branch-protection off, from an operator shell) | see [Disable the gate](policy-packs/branch-protection.md#disable-the-gate-operator-only) |
 
