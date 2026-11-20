@@ -126,9 +126,10 @@ harness itself reads no evidence-ledger rows; how to read old
 
 - [`docs/for-humans.md`](for-humans.md): operator-side guide. Useful
   when you need to ask the operator for a manifest change.
-- [`docs/ARCHITECTURE.md`](ARCHITECTURE.md): the original design
-  (historical); [`docs/CLI.md`](CLI.md) is the current command
-  reference and `src/schema/` the current schema.
+- [`docs/ARCHITECTURE.md`](ARCHITECTURE.md): the architecture
+  reference for the shipped CLI (manifest schema, file layout, CLI
+  surface); [`docs/CLI.md`](CLI.md) is the command reference and
+  `src/schema/` the schema.
 - [`docs/examples/full-manifest.yaml`](examples/full-manifest.yaml):
   a manifest exercising every field.
 - [`CHANGELOG.md`](../CHANGELOG.md): what shipped when, with the PR

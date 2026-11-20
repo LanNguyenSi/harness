@@ -2,7 +2,7 @@
 // retired gate snapshots and dated backups. Nothing else prunes them, so a
 // config directory grew by a few files per gate cycle or apply.
 //
-// Five families, the newest `RETENTION_KEEP` of each kept:
+// Four families, the newest `RETENTION_KEEP` of each kept:
 //
 //   1. retired Claude gate snapshots   harness.gate-disable.<stamp>.(restored|superseded).json
 //   2. retired Codex gate snapshots    harness.gate-disable-codex.<stamp>.(restored|superseded).json
