@@ -8,7 +8,9 @@
 > (`src/schema/session-start-preflight.ts`,
 > `src/cli/doctor/session-start-preflight-setup-version.ts`) describe code
 > that no longer exists; line anchors into surviving files are as of the
-> original decision.
+> original decision. The `docs/CLI.md` VERSION CAVEAT bullet and the
+> `session-start-preflight.ts` VERSION CAVEAT comment were removed with
+> the setup half, so the Consequences items naming them are historical.
 > The git-preflight hook and `GIT_PREFLIGHT_HOOK_MIN_VERSION` were removed
 > with the producers. What remains is the generic `hooks[]` `min_version`
 > check and the version-compare semantics (strict numeric versions,
@@ -46,9 +48,9 @@ of that task named three residuals:
    and the setup-specific check
    (`checkSessionStartPreflightSetupVersion`,
    `src/cli/doctor/session-start-preflight-setup-version.ts:145-182#"return undefined;"`).
-   Documented in `docs/CLI.md`'s VERSION CAVEAT, not a bug, but worth
-   naming as a design cost of one constant feeding two independently
-   fired findings.
+   Documented here: see `## Prerelease handling` and `## Update (task
+   db44ab46)` below, not a bug, but worth naming as a design cost of one
+   constant feeding two independently fired findings.
 3. **Prerelease pass-through.** Both checks extract the probed version
    with `/(\d+(?:\.\d+){0,3})/`, which matches only the leading numeric
    run of a version string. Given `preflight 0.6.0-rc.1`, the match is
@@ -216,7 +218,9 @@ Maintainers keep exactly one comparator instead of two.
 The accepted cost this ADR's Consequences section named for `hooks[]`
 (a `version_command` reporting a git-describe or platform suffix now
 also reads `below_floor` on an exact numeric tie) applies identically to
-all five; see `docs/CLI.md`'s VERSION CAVEAT.
+all five; the comparator implementing that tie-break is
+`compareVersionFloor` in `src/io/version-compare.ts`, and the decision
+and scope are recorded in `## Prerelease handling` above.
 
 ## Reopen criteria
 
