@@ -5,8 +5,9 @@ import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
 // Pins the structure of the publish chain: the npm publish must wait for the
-// full CI, CI and publish must use one resolved commit, and a running publish
-// or release is never cancelled. actionlint cannot see any of this.
+// full CI, CI, publish and release must use one resolved commit, the GitHub
+// Release is cut only after a successful publish, and a running publish or
+// release is never cancelled. actionlint cannot see any of this.
 
 type Step = {
   name?: string;
@@ -26,6 +27,7 @@ type Job = {
   steps?: Step[];
 };
 type Workflow = {
+  on?: Record<string, unknown>;
   permissions?: Record<string, string>;
   concurrency?: { group?: string; "cancel-in-progress"?: unknown };
   jobs: Record<string, Job>;
@@ -56,6 +58,7 @@ const DIST_TAG_CASES: Array<[string, string]> = [
 describe("publish-npm.yml", () => {
   const wf = load("publish-npm.yml");
   const publish = wf.jobs.publish as Job;
+  const release = wf.jobs.release as Job;
 
   it("runs the reusable CI against the resolved commit", () => {
     expect(wf.jobs.ci?.uses).toBe("./.github/workflows/ci.yml");
@@ -76,10 +79,63 @@ describe("publish-npm.yml", () => {
     expect(checkout?.with?.ref).toBe("${{ needs.resolve.outputs.sha }}");
   });
 
-  it("no job in the chain has a job-level `if:` (always() would publish past a red CI)", () => {
-    for (const name of ["resolve", "ci", "publish"]) {
+  it("no job in the chain has a job-level `if:` (always() would publish past a red CI, or release past a failed publish)", () => {
+    for (const name of ["resolve", "ci", "publish", "release"]) {
       expect(wf.jobs[name]?.if, `job ${name}`).toBeUndefined();
     }
+  });
+
+  // A GitHub Release must never exist for a tag whose publish did not
+  // succeed: the release job is a job of this run that waits for `publish`
+  // (and so, transitively, for CI), with no `if:` to override that.
+  it("the release job calls release.yml after the publish job succeeded", () => {
+    expect(release?.uses).toBe("./.github/workflows/release.yml");
+    expect(asList(release?.needs)).toEqual(
+      expect.arrayContaining(["publish", "resolve"]),
+    );
+    expect(release?.if).toBeUndefined();
+  });
+
+  it("the release job releases the resolved tag and commit", () => {
+    expect(release?.with?.tag).toBe("${{ needs.resolve.outputs.tag }}");
+    expect(release?.with?.sha).toBe("${{ needs.resolve.outputs.sha }}");
+  });
+
+  it("every job that gates the release is reachable from it through needs", () => {
+    const reach = (name: string, seen = new Set<string>()): Set<string> => {
+      for (const dep of asList(wf.jobs[name]?.needs)) {
+        if (!seen.has(dep)) {
+          seen.add(dep);
+          reach(dep, seen);
+        }
+      }
+      return seen;
+    };
+    expect([...reach("release")].sort()).toEqual(["ci", "publish", "resolve"]);
+  });
+
+  it("grants contents: write to the release job only", () => {
+    expect(wf.permissions?.contents).toBe("read");
+    expect(wf.permissions?.["id-token"]).toBeUndefined();
+    expect(release?.permissions?.contents).toBe("write");
+    expect(release?.permissions?.["id-token"]).toBeUndefined();
+    for (const name of ["resolve", "ci", "publish"]) {
+      expect(wf.jobs[name]?.permissions?.contents, `job ${name}`).toBe("read");
+    }
+  });
+
+  it("the publish step's other success exits are pinned: already published, and landed despite a non-zero exit", () => {
+    const publishRun =
+      publish.steps?.find((s) => s.name === "Publish")?.run ?? "";
+    // Both are green outcomes that let the release job run, so each must end
+    // the step right there, right after its notice, and only after the
+    // attestation was found.
+    expect(publishRun).toMatch(
+      /if \[ -z "\$\{attestations\}" \]; then\n[\s\S]*?\n\s*fi\n\s*echo "::notice::\$\{pkg\}@\$\{version\} is already on the registry; nothing to publish\."\n\s*exit 0\n/,
+    );
+    expect(publishRun).toMatch(
+      /if \[ -z "\$\{attestations\}" \]; then\n[\s\S]*?\n\s*fi\n\s*echo "::notice::\$\{pkg\}@\$\{version\} reached the registry despite a non-zero publish exit; treating as success\."\n\s*exit 0\n/,
+    );
   });
 
   it("verifies the checkout is the resolved commit before setup-node and the build", () => {
@@ -207,14 +263,92 @@ describe("publish-npm.yml", () => {
 
 describe("release.yml", () => {
   const wf = load("release.yml");
+  const raw = readFileSync(
+    join(process.cwd(), ".github/workflows/release.yml"),
+    "utf8",
+  );
   const steps = wf.jobs.release?.steps ?? [];
+  const checkout = steps.find((s) =>
+    s.uses?.startsWith("actions/checkout@"),
+  ) as Step;
   const versionStep = steps.find((s) => s.id === "version") as Step;
   const releaseStep = steps.find((s) =>
     s.uses?.startsWith("softprops/action-gh-release@"),
   ) as Step;
 
+  // No trigger of its own: a tag push runs publish-npm.yml alone, and the
+  // GitHub Release is created only through its `release` job.
+  it("is only reusable: workflow_call is its sole trigger", () => {
+    expect(Object.keys(wf.on ?? {})).toEqual(["workflow_call"]);
+  });
+
+  it("takes the tag and the resolved commit as required inputs", () => {
+    const inputs = (
+      wf.on?.workflow_call as {
+        inputs?: Record<string, { required?: boolean; type?: string }>;
+      }
+    ).inputs;
+    expect(Object.keys(inputs ?? {}).sort()).toEqual(["sha", "tag"]);
+    for (const name of ["tag", "sha"]) {
+      expect(inputs?.[name]?.required, name).toBe(true);
+      expect(inputs?.[name]?.type, name).toBe("string");
+    }
+  });
+
+  it("runs no CI of its own and has the single release job, with no `if:`", () => {
+    expect(Object.keys(wf.jobs)).toEqual(["release"]);
+    expect(wf.jobs.release?.if).toBeUndefined();
+    expect(wf.jobs.release?.needs).toBeUndefined();
+  });
+
+  it("checks out the resolved commit, not the caller's ref", () => {
+    expect(checkout.with?.ref).toBe("${{ inputs.sha }}");
+    const verify = steps.find(
+      (s) => s.name === "Verify checkout is the resolved commit",
+    ) as Step;
+    expect(verify.env?.EXPECTED_SHA).toBe("${{ inputs.sha }}");
+    expect(verify.run).toMatch(/\[ "\$\{actual\}" != "\$\{EXPECTED_SHA\}" \]/);
+  });
+
+  it("refuses to release a tag that moved off the resolved commit", () => {
+    const verify = steps.find(
+      (s) => s.name === "Verify the tag still points at the resolved commit",
+    ) as Step;
+    expect(verify.env?.TAG_NAME).toBe("${{ inputs.tag }}");
+    expect(verify.env?.EXPECTED_SHA).toBe("${{ inputs.sha }}");
+    expect(verify.run ?? "").not.toContain("${{");
+    expect(verify.run).toContain("refs/tags/${TAG_NAME}^{commit}");
+    expect(verify.run).toMatch(/\[ "\$\{actual\}" != "\$\{EXPECTED_SHA\}" \]/);
+    expect(steps.indexOf(verify)).toBeLessThan(steps.indexOf(releaseStep));
+  });
+
+  // In a called workflow github.ref_name is the CALLER's ref: the tag on a
+  // push, the dispatch branch on a manual run. The inputs are the only
+  // source that names the right tag on both paths.
+  it("takes the tag from the input only, never from github.ref_name or the ref", () => {
+    const structure = JSON.stringify(wf);
+    expect(structure).not.toContain("github.ref");
+    expect(structure).not.toContain("github.sha");
+    expect(releaseStep.with?.tag_name).toBe("${{ inputs.tag }}");
+  });
+
+  it("grants contents: write to the release job only, and never id-token", () => {
+    expect(wf.permissions?.contents).toBe("read");
+    expect(wf.permissions?.["id-token"]).toBeUndefined();
+    expect(wf.jobs.release?.permissions?.contents).toBe("write");
+    expect(wf.jobs.release?.permissions?.["id-token"]).toBeUndefined();
+    expect(raw).not.toMatch(/^\s*push:/m);
+  });
+
+  it("keys its concurrency group on the input tag, apart from the publish group", () => {
+    expect(wf.concurrency?.group).toBe("release-${{ inputs.tag }}");
+    expect(wf.concurrency?.group).not.toBe(
+      load("publish-npm.yml").concurrency?.group,
+    );
+  });
+
   it("the version step derives prerelease from an env-bound tag and exports it", () => {
-    expect(versionStep.env?.TAG_NAME).toBe("${{ github.ref_name }}");
+    expect(versionStep.env?.TAG_NAME).toBe("${{ inputs.tag }}");
     // The tag reaches the script only as an environment variable: a `${{ }}`
     // spliced into the run script would make the tag value script-syntax.
     expect(versionStep.run ?? "").not.toContain("${{");

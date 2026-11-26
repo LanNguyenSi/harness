@@ -72,9 +72,9 @@ jobs:
   ci:
     name: CI
     needs: resolve
-    # The same full gates release.yml runs on a tag push, against the commit
-    # the resolve job pinned. A manual run uses this workflow file (and so the
-    # CI definition) from the branch it is dispatched from.
+    # The full CI gates, once per tag push, against the commit the resolve job
+    # pinned. A manual run uses this workflow file (and so the CI definition)
+    # from the branch it is dispatched from.
     uses: ./.github/workflows/ci.yml
     with:
       ref: ${{ needs.resolve.outputs.sha }}
@@ -264,3 +264,20 @@ jobs:
             sleep "${backoff}"
             attempt=$((attempt + 1))
           done
+
+  release:
+    name: GitHub Release
+    # The GitHub Release follows a successful publish: this job waits for
+    # `publish` and has no `if:`, so a red CI or a failed publish leaves no
+    # release. A re-run that finds the version already on the registry with its
+    # attestation succeeds in `publish` and so still reaches this job; the
+    # release action updates an existing release instead of failing. The tag and
+    # commit are the ones `resolve` pinned.
+    needs: [resolve, publish]
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.resolve.outputs.tag }}
+      sha: ${{ needs.resolve.outputs.sha }}
+    # contents: write is granted on this job only (creating the release).
+    permissions:
+      contents: write
