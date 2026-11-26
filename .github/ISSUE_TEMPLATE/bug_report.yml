@@ -12,7 +12,7 @@ body:
         - grounding / ledger integration
         - tools section
         - memory section
-        - policies section
+        - policy_packs / packs
         - CLI
         - other / unsure
     validations:
@@ -36,9 +36,10 @@ body:
     id: version
     attributes:
       label: harness version
-      placeholder: "0.x.y"
+      description: Output of `harness --version`.
+      placeholder: "2.x.y"
   - type: input
     id: node
     attributes:
       label: Node.js version
-      placeholder: "20.x"
+      placeholder: "22.x"
