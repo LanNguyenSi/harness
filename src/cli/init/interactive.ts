@@ -991,10 +991,10 @@ export async function runInteractive(
             "Requires agent-tasks on PATH. Ships the reference manifest: grounding, the full tool inventory (agent-tasks, grounding-mcp, gh, skills), memory-router and branch-protection.",
         },
         {
-          name: "Custom (advanced, bail out and hand-edit)",
+          name: "Custom (advanced, à-la-carte composer)",
           value: "custom",
           description:
-            "Print the install layout and exit. Use this when none of the profiles fit and you plan to author the manifest from scratch.",
+            "Pick discrete policy packs / MCP servers; the wizard composes a validate-clean starter manifest from your selection and may offer to install missing packages.",
         },
       ],
     })) as ProfileChoice;

@@ -1654,6 +1654,48 @@ describe("interactive wizard — Custom path (task 31d2fbb5)", () => {
     expect(fs.existsSync(path.join(tmpHome, ".harness", "harness.yaml"))).toBe(false);
   });
 
+  it("the Custom choice text describes the composer (packs/MCPs pick, validate-clean starter manifest), not a bail out to hand-edit", async () => {
+    fs.mkdirSync(path.join(tmpHome, ".claude"));
+    // Same prompt stub the whole suite uses, with the profile `select`
+    // wrapped to record the choices it was shown before answering.
+    const stub = mockPrompts({
+      select: ["custom"],
+      checkbox: [[], []], // empty pack + MCP picks: the flow aborts after the select
+    });
+    const profileChoices = new Map<string, { name: string; description: string }>();
+    const prompts: InteractivePrompts = {
+      ...stub,
+      select: (async (args: Parameters<InteractivePrompts["select"]>[0]) => {
+        for (const c of (args.choices ?? []) as { value?: string; name?: string; description?: string }[]) {
+          if (typeof c.value === "string") {
+            profileChoices.set(c.value, { name: c.name ?? "", description: c.description ?? "" });
+          }
+        }
+        return stub.select(args);
+      }) as InteractivePrompts["select"],
+    };
+    const cap = captureStreams();
+    const result = await runInteractive({
+      homeDir: tmpHome,
+      prompts,
+      stdout: cap.out,
+      stderr: cap.err,
+    });
+    expect(result.aborted).toBe(true);
+    const custom = profileChoices.get("custom");
+    expect(custom).toBeDefined();
+    // The wording must match what docs/init-interactive.md describes: the
+    // wizard composes a manifest from picked packs / MCPs.
+    expect(`${custom!.name} ${custom!.description}`).toMatch(/composer/i);
+    expect(custom!.description).toMatch(/packs/i);
+    expect(custom!.description).toMatch(/MCP/i);
+    expect(custom!.description).toMatch(/validate-clean/i);
+    expect(custom!.description).toMatch(/install missing packages/i);
+    // The stale copy is gone: the flow never bails out or prints a layout.
+    expect(`${custom!.name} ${custom!.description}`).not.toMatch(/bail out/i);
+    expect(`${custom!.name} ${custom!.description}`).not.toMatch(/print the install layout/i);
+  });
+
   it("passes the MCP picks to the dependency resolver: a missing MCP binary is surfaced", async () => {
     fs.mkdirSync(path.join(tmpHome, ".claude"));
     // An EMPTY PATH dir: every binary reads as missing, so the dep check
