@@ -1,31 +1,72 @@
 name: Release
 
+# Reusable workflow, called by publish-npm.yml's `release` job after the npm
+# publish succeeded. It has no trigger of its own: a GitHub Release exists only
+# for a tag whose CI went green and whose version reached the registry, and a
+# tag push starts one workflow run (publish-npm.yml), not two. Run it through
+# publish-npm.yml (a tag push, or Actions -> Publish to npm -> Run workflow
+# with the tag); there is no separate entry point.
 on:
-  push:
-    tags: ["v*"]
+  workflow_call:
+    inputs:
+      tag:
+        description: "Release tag to release (e.g. v0.10.0), as resolved by publish-npm.yml."
+        required: true
+        type: string
+      sha:
+        description: "Commit the tag resolved to when the run started; the release is built from it."
+        required: true
+        type: string
 
+# The caller's `release` job grants contents: write; a called workflow can only
+# narrow what it is given, and writing is needed by the release job alone.
 permissions:
-  contents: write
+  contents: read
 
-# One release per tag at a time; a running release is never cancelled.
+# One release per tag at a time; a running release is never cancelled. Keyed on
+# the input tag (github.ref_name is the caller's branch on a manual run) and
+# distinct from the caller's `publish-npm-` group, so the two never wait on
+# each other.
 concurrency:
-  group: release-${{ github.ref_name }}
+  group: release-${{ inputs.tag }}
   cancel-in-progress: false
 
 jobs:
-  ci:
-    name: CI
-    uses: ./.github/workflows/ci.yml
-    permissions:
-      contents: read
-
   release:
     name: GitHub Release
-    needs: ci
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.sha }}
+
+      - name: Verify checkout is the resolved commit
+        env:
+          EXPECTED_SHA: ${{ inputs.sha }}
+        run: |
+          actual=$(git rev-parse HEAD)
+          if [ "${actual}" != "${EXPECTED_SHA}" ]; then
+            echo "::error::checked out ${actual}, expected the resolved commit ${EXPECTED_SHA}" >&2
+            exit 1
+          fi
+
+      - name: Verify the tag still points at the resolved commit
+        # The release is cut for the tag, so a tag moved after the resolve job
+        # pinned it would put the notes of one commit on another. --force: the
+        # tag is read from the remote as it is now.
+        env:
+          TAG_NAME: ${{ inputs.tag }}
+          EXPECTED_SHA: ${{ inputs.sha }}
+        run: |
+          git fetch --force --no-tags origin "refs/tags/${TAG_NAME}:refs/tags/${TAG_NAME}"
+          actual=$(git rev-parse --verify "refs/tags/${TAG_NAME}^{commit}")
+          if [ "${actual}" != "${EXPECTED_SHA}" ]; then
+            echo "::error::tag ${TAG_NAME} now points at ${actual}, not the resolved commit ${EXPECTED_SHA}; refusing to release it." >&2
+            exit 1
+          fi
 
       - name: Extract version from tag
         id: version
@@ -33,7 +74,7 @@ jobs:
         # `${{ }}` becomes a plain environment variable, so the tag value is
         # shell-data, never spliced into the script's syntax.
         env:
-          TAG_NAME: ${{ github.ref_name }}
+          TAG_NAME: ${{ inputs.tag }}
         run: |
           version="${TAG_NAME#v}"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
@@ -83,8 +124,8 @@ jobs:
         # check:release-notes-size` step already catches this before the
         # tag, against package.json's version - this step is the
         # at-tag-time backstop for the same measurement, against the tag
-        # actually being released. This job has no node/npm setup (the
-        # `ci` job above runs full CI separately), so it re-measures
+        # actually being released. This job has no node/npm setup (CI
+        # already ran in the calling workflow), so it re-measures
         # directly rather than shelling out to the script; move the
         # ceiling in both places together, never one alone.
         #
@@ -128,6 +169,10 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
+          tag_name: ${{ inputs.tag }}
+          # The tag exists (the guard above just read it); this only keeps a tag
+          # deleted in the gap from being re-created at the default branch HEAD.
+          target_commitish: ${{ inputs.sha }}
           name: v${{ steps.version.outputs.version }}
           body_path: release_notes.md
           generate_release_notes: false

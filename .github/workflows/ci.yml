@@ -95,8 +95,8 @@ jobs:
         # skip convention for test/docs/ci/style/refactor/chore commits is
         # documented in the script header. Fails fast BEFORE Build so a
         # release can't be cut with silently missing notes (the pre-0.42.0
-        # failure mode; release.yml additionally hard-stops on empty
-        # extracted notes).
+        # failure mode; release.yml, which publish-npm.yml calls after the
+        # publish, additionally hard-stops on empty extracted notes).
         run: npm run check:changelog-coverage
 
       - name: No shipped [Unreleased] pointer
@@ -119,11 +119,11 @@ jobs:
       - name: Release-notes size ceiling
         # scripts/check-release-notes-size.mjs - the CHANGELOG.md section
         # for package.json's version must stay under a size ceiling well
-        # below GitHub's release/tag body limit; release.yml runs the
-        # same measurement again at tag time (see its own "Release-notes
-        # size ceiling" step). Catching it here, before Build, means an
-        # oversized section is found during the PR rather than at the
-        # point of tagging.
+        # below GitHub's release/tag body limit; release.yml (called by
+        # publish-npm.yml) runs the same measurement again at tag time
+        # (see its own "Release-notes size ceiling" step). Catching it
+        # here, before Build, means an oversized section is found during
+        # the PR rather than at the point of tagging.
         run: npm run check:release-notes-size
 
       - name: Build
