@@ -77,9 +77,11 @@ function formatEnvironmentSection(report: DoctorReport): string[] {
   const harness = report.harnessBinary;
   const binShown = bin !== undefined && (bin.status === "warn" || bin.status === "error");
   const harnessShown = harness !== undefined && harness.status === "error";
-  if (!binShown && !harnessShown) return [];
+  const host = report.guardedHookHost;
+  if (!binShown && !harnessShown && host === undefined) return [];
   const out: string[] = ["", "Environment"];
   if (harness !== undefined && harnessShown) out.push(`  ✗ harness binary: ${harness.message}`);
+  if (host !== undefined) out.push(`  ⚠ branch-protection hook host: ${host.message}`);
   if (bin !== undefined && binShown) {
     out.push(
       `  ${bin.status === "error" ? "✗" : "⚠"} npm global bin (${bin.binDir}) is not on PATH`,

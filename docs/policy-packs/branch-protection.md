@@ -345,12 +345,33 @@ that differs from the generated one (or as disabled, when
 `harness gate disable` took it out), and `harness uninstall` and
 `harness gate enable` accept either spelling.
 
+### Host requirement: a POSIX `/bin/sh`
+
+The guarded line is a `/bin/sh -c` command, so it needs a host where the
+runtime starts hooks with, or can resolve, a POSIX `/bin/sh`: Linux,
+macOS and WSL2. On native Windows a runtime that starts the hook through
+`cmd.exe` or PowerShell cannot resolve `/bin/sh`, the spawn fails or exits
+with a code other than 2, and both runtimes then run the tool: the gate
+fails open. Whether a given runtime on Windows starts hooks through a POSIX
+shell (Git for Windows' `sh`, say) is that runtime's behaviour and is not
+verified here, so harness does not claim the gate works there. `harness
+apply` (Claude Code and `--runtime codex`, not `--runtime opencode`, which
+wires no hooks) prints `branch-protection hook line needs a POSIX sh
+(/bin/sh); on native Windows it may not run and the gate would fail open;
+run harness under WSL2` as one warning when the platform is `win32` and a
+guarded hook is part of the expansion (also under `--dry-run` and in the
+`--json` `warnings`), and `harness doctor` reports the same text as a
+warning (`branch-protection hook host`, `guardedHookHost` in `--json`).
+Neither changes the generated files or the exit code. Run harness under
+WSL2 on Windows.
+
 ## Test fixtures
 
 - `tests/cli/pack-hook-branch-protection.test.ts`, the blocker against real git, the injected git runner and the per-runtime contract
 - `tests/runtime/git-branch.test.ts`, the branch reader
 - `tests/runtime/git-branch-differential.test.ts`, the gate against git run plainly over the repository layouts
 - `tests/cli/hook-git-context-fifo.test.ts`, a git file that never answers, through the built CLI
+- `tests/cli/guarded-hook-host.test.ts`, the native-Windows warning in apply and doctor, with an injected platform
 - `tests/cli/manifest-posture.test.ts`, removed manifest keys warn and are ignored
 - `tests/policy-packs/branch-protection-runtime.test.ts`, helpers
 - `tests/policy-packs/branch-protection-expand.test.ts`, pack expansion

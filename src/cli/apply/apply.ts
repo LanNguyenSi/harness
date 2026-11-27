@@ -60,6 +60,10 @@ import {
   isRuntime,
   type Runtime,
 } from "../../policy-packs/index.js";
+import {
+  guardedHookHostWarning,
+  isGuardedHarnessCommand,
+} from "../../policy-packs/builtin/guarded-harness-command.js";
 import { parseManifest, type Manifest } from "../../schema/index.js";
 import { formatPostureWarning, originalIndex } from "../../schema/removed-keys.js";
 import { EX_FAIL, EX_NOINPUT, HarnessExitError } from "../exit-codes.js";
@@ -108,6 +112,12 @@ export interface ApplyOptions {
    * exercised hermetically.
    */
   stdinIsTTY?: boolean;
+  /**
+   * Test seam: overrides `process.platform` for the one check that depends on
+   * it, the native-Windows warning for a guarded hook line. Generated files
+   * never depend on it.
+   */
+  platform?: NodeJS.Platform;
   /**
    * Phase 3 follow-up: when set, any non-empty `lockDrift` causes apply
    * to refuse with the `lock-drift-refuse` outcome before writing,
@@ -634,6 +644,16 @@ function buildExpectedFiles(
     packExpansion.hooks.length === 0
       ? manifest
       : { ...manifest, hooks: [...manifest.hooks, ...packExpansion.hooks] };
+  // A guarded hook line needs a POSIX /bin/sh; on native Windows it may not
+  // run and the gate would fail open. The warning changes no generated file.
+  // Only the claude-code and codex results below carry it: opencode wires no
+  // hooks, so it has nothing to warn about.
+  const hostWarning = ![...manifest.hooks, ...packExpansion.hooks].some((h) =>
+    isGuardedHarnessCommand(h.command),
+  )
+    ? null
+    : guardedHookHostWarning(opts.platform ?? process.platform);
+  const hostWarnings = hostWarning === null ? [] : [hostWarning];
   const indexResult = generateMemoryIndex(manifest, {
     ...(opts.homeDir !== undefined ? { homeDir: opts.homeDir } : {}),
     ...(opts.project !== undefined ? { projectName: opts.project } : {}),
@@ -658,7 +678,7 @@ function buildExpectedFiles(
         { basename: MEMORY_BASENAME, content: indexResult.content },
         ...packFiles,
       ],
-      warnings: [...codexConfig.warnings, ...indexResult.warnings, ...packExpansion.warnings],
+      warnings: [...codexConfig.warnings, ...indexResult.warnings, ...packExpansion.warnings, ...hostWarnings],
     };
   }
 
@@ -693,7 +713,7 @@ function buildExpectedFiles(
       { basename: MEMORY_BASENAME, content: indexResult.content },
       ...packFiles,
     ],
-    warnings: [...settingsResult.warnings, ...indexResult.warnings, ...packExpansion.warnings],
+    warnings: [...settingsResult.warnings, ...indexResult.warnings, ...packExpansion.warnings, ...hostWarnings],
   };
 }
 

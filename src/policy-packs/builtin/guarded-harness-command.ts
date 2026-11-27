@@ -35,6 +35,12 @@
 // every shell parses the same way; the guard itself always runs under sh.
 // The script holds no single quote or backslash, so the quoting stays
 // trivially correct; its `$` and `"` sit inside the outer single quotes.
+//
+// The line needs a POSIX `/bin/sh` on the host that starts the hook (linux,
+// darwin, WSL2). On native Windows the runtime may start hooks through
+// cmd.exe or PowerShell, where `/bin/sh` does not resolve and both runtimes
+// read a failed spawn as an allow; apply and doctor warn there instead of
+// leaving the gate looking active (`guardedHookHostWarning`).
 
 /** The command word every guarded line runs and the PATH lookup targets. */
 const HARNESS_BINARY = "harness";
@@ -53,6 +59,18 @@ export const MISSING_BINARY_REASON =
 export const COULD_NOT_RUN_REASON =
   "harness hook could not run (exit $rc), so this tool call is blocked. " +
   "Ask the operator to fix the harness install or PATH; do not edit hook settings yourself.";
+
+/**
+ * What apply and doctor say on a host without a POSIX `/bin/sh` when a guarded
+ * hook line is wired. The line itself is not changed for that host.
+ */
+export const GUARDED_HOOK_HOST_WARNING =
+  "branch-protection hook line needs a POSIX sh (/bin/sh); on native Windows it may not run and the gate would fail open; run harness under WSL2";
+
+/** The host warning for `platform`, or `null` where `/bin/sh` is expected to exist. */
+export function guardedHookHostWarning(platform: NodeJS.Platform): string | null {
+  return platform === "win32" ? GUARDED_HOOK_HOST_WARNING : null;
+}
 
 /**
  * The line a blocking harness hook runs. `subcommand` is everything after the
