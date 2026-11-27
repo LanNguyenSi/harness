@@ -24,7 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Security
 
-- On native Windows, `harness apply` and `harness doctor` now warn that the guarded branch-protection hook line needs a POSIX `/bin/sh` and may not run there, in which case both runtimes run the tool and the gate fails open. `apply` (Claude Code and `--runtime codex`, not opencode) adds one warning when the platform is `win32` and a guarded hook is part of the expansion (also under `--dry-run` and in the `--json` `warnings`); `doctor` reports it as a warning (`guardedHookHost` in `--json`) without changing its exit code. The hook line, its recognisers and every generated file are unchanged; the docs state the host requirement (Linux, macOS, WSL2) and recommend WSL2 on Windows.
+- On native Windows, `harness apply` and `harness doctor` now warn that the guarded branch-protection hook line needs a POSIX `/bin/sh` and may not run there, in which case both runtimes run the tool and the gate fails open. `apply` (Claude Code and `--runtime codex`, not opencode) adds one warning when the platform is `win32` and a guarded hook is part of the expansion (also under `--dry-run` and in the `--json` `warnings`); `doctor` reports it as a warning (`guardedHookHost` in `--json`) without changing its exit code. The hook line, its recognisers and every generated file are unchanged; the docs state the host requirement (Linux, macOS, WSL2) and recommend WSL2 on Windows (#788; commits `eb97490d`, `33892cd6`).
 
 ## [2.0.0] - 2026-11-17
 
