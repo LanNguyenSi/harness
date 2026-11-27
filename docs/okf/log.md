@@ -2,6 +2,10 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+## 2026-11-27
+
+- 2026-11-27T07:58:49Z, apply and doctor warn on a native Windows host that the guarded branch-protection hook line needs a POSIX `sh` (`/bin/sh`); the line itself is unchanged. `codex-adapter-parity-gaps.md`: the fail-direction sentence now names the host limit, re-verified against the apply and doctor warning code; its runtime-selection and doctor-runtime claims are unaffected. `evidence-ledger-trust-boundary.md` and `gate-kill-switch.md`: their `docs/policy-packs/branch-protection.md` citations sit above the new host-requirement subsection and still resolve; claims unchanged. Re-stamped all three.
+
 ## 2026-11-19
 
 - 2026-11-19T08:07:25Z, #778, #779, #780: `docs/CLI.md` changed (env table rows for `VITEST`, `HARNESS_ALLOW_REAL_SPAWN` and `HARNESS_ALLOW_REAL_GENERATED_DIR`, the `harness apply` row's unreadable-asset warning sentences, the `harness uninstall` row's Codex hook-block detection) and `src/cli/apply/apply.ts` changed (the lock entries are now built through `buildLockEntriesWithWarnings` and its warnings joined to the apply result, also on a no-changes apply). `codex-adapter-parity-gaps.md` lists both as sources; re-verified against HEAD: runtime selection and reuse (`selectRuntime`), `CODEX_CONFIG_BASENAME`, the `--target` / `--runtime codex` refusal and its message, and hook emission are untouched by the diff, and none of its claims depend on the new CLI.md rows or sentences; no claim changed, no citation moved. Re-stamped. Check: `npx okf-kit check docs/okf`.

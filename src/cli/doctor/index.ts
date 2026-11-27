@@ -22,7 +22,10 @@ import {
 } from "../apply/generate-settings.js";
 import { parsePackSource } from "../../policy-packs/source.js";
 import { expandPolicyPacks } from "../../policy-packs/expand.js";
-import { isGuardedHarnessCommand } from "../../policy-packs/builtin/guarded-harness-command.js";
+import {
+  guardedHookHostWarning,
+  isGuardedHarnessCommand,
+} from "../../policy-packs/builtin/guarded-harness-command.js";
 import { resolveBuiltin } from "../../policy-packs/registry.js";
 import { checkPolicyPackConfigs } from "../../policy-packs/config-check.js";
 import { checkPolicyPackVersions } from "../../policy-packs/version-check.js";
@@ -51,6 +54,7 @@ import {
   KNOWN_DOCTOR_TARGETS,
   type CliEntryReport,
   type DoctorReport,
+  type GuardedHookHostReport,
   type HarnessBinaryReport,
   type DoctorTarget,
   type HookEntryReport,
@@ -110,6 +114,11 @@ export interface DoctorOptions extends LoaderOptions {
    * hermetic against the operator's real env.
    */
   envOverride?: NodeJS.ProcessEnv;
+  /**
+   * Test-injection knob for the guarded-hook host check: the platform to
+   * report for. Defaults to `process.platform`.
+   */
+  platform?: NodeJS.Platform;
 }
 
 export { isDoctorTarget, KNOWN_DOCTOR_TARGETS };
@@ -710,6 +719,7 @@ function countDiagnostics(report: Omit<DoctorReport, "errorCount" | "warningCoun
   // An escalated npm-bin finding is detail of the same problem the
   // `harnessBinary` error counts, so it is not counted a second time.
   if (report.harnessBinary?.status === "error") errorCount++;
+  if (report.guardedHookHost?.status === "warn") warningCount++;
   if (report.memory.routerExecutable && !report.memory.routerExecutable.exists) errorCount++;
   if (!report.memory.routerExecutable) warningCount++;
   if (report.memory.routerVersion?.status === "warn") warningCount++;
@@ -867,6 +877,14 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
             "This checks doctor's own PATH; an agent started from a different environment is not covered.",
         }
     : undefined;
+  // The guarded hook line needs a POSIX /bin/sh (see guarded-harness-command.ts);
+  // on native Windows it may not run and the gate would fail open. A warning,
+  // not an error: whether the runtime finds a sh is outside harness's view.
+  const hostWarning = guardedHookInstalled
+    ? guardedHookHostWarning(opts.platform ?? process.platform)
+    : null;
+  const guardedHookHost: GuardedHookHostReport | undefined =
+    hostWarning !== null ? { status: "warn", message: hostWarning } : undefined;
   const reportedNpmGlobalBin =
     npmGlobalBin !== undefined
       ? escalateForGuardedHook(npmGlobalBin, {
@@ -926,6 +944,7 @@ export async function doctor(opts: DoctorOptions = {}): Promise<DoctorReport> {
     ...(claudeMcp !== undefined ? { claudeMcp } : {}),
     ...(reportedNpmGlobalBin !== undefined ? { npmGlobalBin: reportedNpmGlobalBin } : {}),
     ...(harnessBinary !== undefined ? { harnessBinary } : {}),
+    ...(guardedHookHost !== undefined ? { guardedHookHost } : {}),
   };
   if (opts.target === "codex") {
     const manifestDir = path.dirname(resolved.base);

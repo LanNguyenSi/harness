@@ -238,6 +238,12 @@ export interface DoctorReport {
    * fixed. Independent of `npmGlobalBin`, which only knows the npm prefix.
    */
   harnessBinary?: HarnessBinaryReport;
+  /**
+   * Present when a guarded blocking hook is wired for a hook runtime and the
+   * platform is native Windows: the hook line needs a POSIX `/bin/sh`, which
+   * may not resolve there, and the gate would fail open. A warning.
+   */
+  guardedHookHost?: GuardedHookHostReport;
   memory: MemoryReport;
   hooks: HookEntryReport[];
   /**
@@ -302,6 +308,11 @@ export interface HarnessBinaryReport {
   status: "ok" | "error";
   /** The resolved path; empty on error. */
   resolved: string;
+  message: string;
+}
+/** The guarded-hook host finding; see `DoctorReport.guardedHookHost`. */
+export interface GuardedHookHostReport {
+  status: "warn";
   message: string;
 }
 export type {
