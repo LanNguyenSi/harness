@@ -176,45 +176,78 @@ describe("apply: the native-Windows warning for a guarded hook line", () => {
     expect(countOf(second.warnings)).toBe(1);
   });
 
-  it("the generated files are byte-identical to the linux run", async () => {
-    const winHome = makeHome("win");
-    const linHome = makeHome("lin");
+  function listFiles(root: string): string[] {
+    const out: string[] = [];
+    const walk = (dir: string): void => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, e.name);
+        if (e.isDirectory()) walk(p);
+        else out.push(path.relative(root, p));
+      }
+    };
+    walk(root);
+    return out.sort();
+  }
+
+  /** Every generated file of a win32 apply equals the linux apply's, `.last-apply` aside. */
+  async function expectByteIdentical(runtime: "claude-code" | "codex", mainFile: string): Promise<void> {
+    const winHome = makeHome(`win-${runtime}`);
+    const linHome = makeHome(`lin-${runtime}`);
     writeManifest(winHome, { packs: PACK });
     writeManifest(linHome, { packs: PACK });
-    await apply({ homeDir: winHome, platform: "win32" });
-    await apply({ homeDir: linHome, platform: "linux" });
+    await apply({ homeDir: winHome, platform: "win32", runtime });
+    await apply({ homeDir: linHome, platform: "linux", runtime });
 
-    const listFiles = (root: string): string[] => {
-      const out: string[] = [];
-      const walk = (dir: string): void => {
-        for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-          const p = path.join(dir, e.name);
-          if (e.isDirectory()) walk(p);
-          else out.push(path.relative(root, p));
-        }
-      };
-      walk(root);
-      return out.sort();
-    };
     const winRoot = path.join(winHome, GENERATED_DIRNAME);
     const linRoot = path.join(linHome, GENERATED_DIRNAME);
     const files = listFiles(winRoot);
     expect(files).toEqual(listFiles(linRoot));
-    expect(files).toContain("settings.json");
+    expect(files).toContain(mainFile);
     // .last-apply records the home it ran under; every other file must match.
     for (const rel of files.filter((f) => f !== ".last-apply")) {
-      expect(fs.readFileSync(path.join(winRoot, rel), "utf8")).toBe(
-        fs.readFileSync(path.join(linRoot, rel), "utf8"),
-      );
+      const win = fs.readFileSync(path.join(winRoot, rel), "utf8");
+      expect(win).toBe(fs.readFileSync(path.join(linRoot, rel), "utf8"));
+      expect(win).not.toContain("WSL2");
     }
-    const settings = fs.readFileSync(path.join(winRoot, "settings.json"), "utf8");
-    expect(settings).not.toContain("WSL2");
-    expect(settings).toContain("/bin/sh -c 'command -v harness");
+    expect(fs.readFileSync(path.join(winRoot, mainFile), "utf8")).toContain("command -v harness");
+  }
+
+  it("claude-code: the generated files are byte-identical to the linux run", async () => {
+    await expectByteIdentical("claude-code", "settings.json");
   });
 
-  it("run() apply: exit 0, a `warning:` line on stderr and the warning in --json", async () => {
-    // The CLI reads process.platform, so this one only runs the check on win32;
-    // elsewhere it pins the silent side through the same entry point.
+  it("codex: the generated files are byte-identical to the linux run", async () => {
+    await expectByteIdentical("codex", "codex/config.toml");
+  });
+
+  it("codex --install: the installed config is byte-identical to the linux run", async () => {
+    const installed: Record<string, string> = {};
+    for (const platform of ["win32", "linux"] as const) {
+      const home = makeHome(`install-${platform}`);
+      writeManifest(home, { packs: PACK });
+      const codexConfig = path.join(home, "codex-live", "config.toml");
+      fs.mkdirSync(path.dirname(codexConfig), { recursive: true });
+      const r = await apply({
+        homeDir: home,
+        platform,
+        runtime: "codex",
+        installCodex: true,
+        codexConfigPath: codexConfig,
+      });
+      expect(countOf(r.warnings)).toBe(platform === "win32" ? 1 : 0);
+      // The install header names the generated source under this home; the
+      // homes differ by design, so compare with the home masked.
+      installed[platform] = fs.readFileSync(codexConfig, "utf8").split(home).join("<home>");
+    }
+    expect(installed.win32).toBe(installed.linux);
+    expect(installed.win32).not.toContain("WSL2");
+    expect(installed.win32).toContain("command -v harness");
+  });
+
+  it("run() apply --dry-run: exit 0, and the `warning:` stderr line appears exactly on a win32 host", async () => {
+    // The CLI reads process.platform and has no platform flag, so the win32
+    // side is pinned through apply() above; this pins the CLI entry point on
+    // whichever host runs the suite.
     const home = makeHome("h");
     const manifestPath = writeManifest(home, { packs: PACK });
     let err = "";
@@ -236,11 +269,13 @@ class NoMcp implements McpProbe {
   }
 }
 
-async function runDoctor(home: string, platform: NodeJS.Platform | undefined) {
-  const dir = makeHome("bin");
-  const bin = path.join(dir, "harness");
-  fs.writeFileSync(bin, "#!/bin/sh\nexit 0\n");
-  fs.chmodSync(bin, 0o755);
+async function runDoctor(home: string, platform: NodeJS.Platform | undefined, binDir?: string) {
+  const dir = binDir ?? makeHome("bin");
+  if (binDir === undefined) {
+    const bin = path.join(dir, "harness");
+    fs.writeFileSync(bin, "#!/bin/sh\nexit 0\n");
+    fs.chmodSync(bin, 0o755);
+  }
   return doctor({
     configPath: path.join(home, "harness.yaml"),
     homeOverride: home,
@@ -281,6 +316,27 @@ describe("doctor: the native-Windows finding for a guarded hook line", () => {
     const lin = await runDoctor(home, "linux");
     expect(win.harnessBinary).toEqual(lin.harnessBinary);
     expect(win.harnessBinary?.status).toBe("ok");
+  });
+
+  it("win32 when the recorded runtime is codex: the warning is present", async () => {
+    const home = makeHome("h");
+    writeManifest(home, { packs: PACK });
+    await apply({ homeDir: home, runtime: "codex", platform: "linux" });
+    const win = await runDoctor(home, "win32");
+    expect(win.packExpansionRuntime.runtime).toBe("codex");
+    expect(win.guardedHookHost).toEqual({ status: "warn", message: GUARDED_HOOK_HOST_WARNING });
+  });
+
+  it("win32 with harness missing from PATH: harnessBinary errors and the warning stays", async () => {
+    const home = makeHome("h");
+    writeManifest(home, { packs: PACK });
+    const noHarness = makeHome("empty-bin");
+    const lin = await runDoctor(home, "linux", noHarness);
+    const win = await runDoctor(home, "win32", noHarness);
+    expect(win.harnessBinary?.status).toBe("error");
+    expect(win.guardedHookHost).toEqual({ status: "warn", message: GUARDED_HOOK_HOST_WARNING });
+    expect(win.warningCount).toBe(lin.warningCount + 1);
+    expect(win.errorCount).toBe(lin.errorCount);
   });
 
   it("linux and darwin with the pack: none", async () => {
