@@ -116,8 +116,8 @@ export class GateDisableError extends Error {
 }
 
 function resolveSettingsPath(opts: GateDisableOptions): string {
-  if (typeof opts.settingsPath === "string" && opts.settingsPath.length > 0) {
-    return opts.settingsPath;
+  if (settingsPathGiven(opts)) {
+    return opts.settingsPath as string;
   }
   const home = opts.homeDir ?? os.homedir();
   return path.join(home, DEFAULT_SETTINGS_REL);
@@ -573,9 +573,14 @@ function chooseSnapshot(
  * Empty when the operator already chose the file.
  */
 function applyTargetHint(opts: GateDisableOptions, matcher: string): string {
-  if (typeof opts.settingsPath === "string" && opts.settingsPath.length > 0) return "";
+  if (settingsPathGiven(opts)) return "";
   return (
     ` Hooks wired with \`harness apply --target <file>\` live in that file, not here: ` +
     `run \`harness gate disable --matcher ${shellQuote(matcher)} --settings <file>\`.`
   );
+}
+
+/** Whether an explicit settings path was given; an empty string counts as not given. One predicate for the path choice and the hint. */
+function settingsPathGiven(opts: GateDisableOptions): boolean {
+  return typeof opts.settingsPath === "string" && opts.settingsPath.length > 0;
 }

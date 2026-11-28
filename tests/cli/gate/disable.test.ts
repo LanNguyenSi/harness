@@ -202,6 +202,7 @@ describe("gateDisable — removal", () => {
 
     it("default settings path: keeps the listing sentence and adds the apply --target hint", () => {
       const msg = noMatch({ explicit: false, matcher: "DoesNotExist" });
+      expect(msg).toContain('no hook groups matched matcher substring "DoesNotExist"');
       expect(msg).toContain(listing);
       expect(msg).toContain("`harness apply --target <file>`");
       expect(msg).toContain("`harness gate disable --matcher DoesNotExist --settings <file>`");
@@ -210,9 +211,28 @@ describe("gateDisable — removal", () => {
 
     it("explicit --settings: no hint, the operator already chose the file", () => {
       const msg = noMatch({ explicit: true, matcher: "DoesNotExist" });
-      expect(msg).toContain(listing);
-      expect(msg).not.toContain("apply --target");
-      expect(msg).not.toContain("<file>");
+      expect(msg.endsWith(listing)).toBe(true);
+      expect(msg).toBe(
+        `no hook groups matched matcher substring "DoesNotExist" in ${settingsPath}. ` +
+          `Run \`harness gate disable --settings ${settingsPath}\` (no --matcher) ${listing}`,
+      );
+    });
+
+    it("empty settingsPath counts as not given: searches the default path and adds the hint", () => {
+      const home = path.join(tmp, "home");
+      fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+      fs.writeFileSync(
+        path.join(home, ".claude", "settings.json"),
+        JSON.stringify({ hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ command: "x" }] }] } }),
+      );
+      let msg = "";
+      try {
+        gateDisable({ settingsPath: "", homeDir: home, matcher: "DoesNotExist" });
+      } catch (e) {
+        msg = (e as Error).message;
+      }
+      expect(msg).toContain(path.join(home, ".claude", "settings.json"));
+      expect(msg).toContain("`harness apply --target <file>`");
     });
 
     it("quotes a matcher with shell-special characters in the hinted command", () => {
