@@ -2,6 +2,10 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+## 2026-11-28
+
+- 2026-11-28T13:13:29Z, #789: `src/cli/gate/disable.ts` changed (the no-match error of `harness gate disable --matcher` gained a sentence pointing at `--settings <file>` when no `--settings` was given, through the new `applyTargetHint` and `settingsPathGiven`, which also replaces the inline check in `resolveSettingsPath`; the added helpers sit at the end of the file, so every cited line range above them is unchanged). `gate-kill-switch.md` already carried the hint sentence (added with #789); re-verified it against HEAD: the hint is empty when a settings path was given and otherwise names `harness apply --target <file>` and the command with `--settings <file>` and the same matcher. Also re-verified its `docs/policy-packs/branch-protection.md` claims (changed by #788: a new host-requirement subsection): the "Disable the gate (operator only)" heading, the `apply_patch` / `hooks = []` Codex recipe, the `enabled: false` line, the `Write|Edit` and `apply_patch` matchers and the no-ledger-tag, session-state or override-marker sentence are all still there; no claim false, no citation moved. Re-stamped. Check: `npx okf-kit check docs/okf`.
+
 ## 2026-11-27
 
 - 2026-11-27T07:58:49Z, apply and doctor warn on a native Windows host that the guarded branch-protection hook line needs a POSIX `sh` (`/bin/sh`); the line itself is unchanged. `codex-adapter-parity-gaps.md`: the fail-direction sentence now names the host limit, re-verified against the apply and doctor warning code; its runtime-selection and doctor-runtime claims are unaffected. `evidence-ledger-trust-boundary.md` and `gate-kill-switch.md`: their `docs/policy-packs/branch-protection.md` citations sit above the new host-requirement subsection and still resolve; claims unchanged. Re-stamped all three.
