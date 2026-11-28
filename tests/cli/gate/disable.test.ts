@@ -182,6 +182,49 @@ describe("gateDisable — removal", () => {
     );
   });
 
+  describe("no-match hint for apply --target wiring", () => {
+    const listing = "to list the available candidates.";
+    function noMatch(opts: { explicit: boolean; matcher: string }): string {
+      const home = path.join(tmp, "home");
+      fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+      fs.writeFileSync(
+        path.join(home, ".claude", "settings.json"),
+        JSON.stringify({ hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ command: "x" }] }] } }),
+      );
+      writeSettings({ hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ command: "x" }] }] } });
+      try {
+        gateDisable(opts.explicit ? { settingsPath, matcher: opts.matcher } : { homeDir: home, matcher: opts.matcher });
+      } catch (e) {
+        return (e as Error).message;
+      }
+      throw new Error("expected throw");
+    }
+
+    it("default settings path: keeps the listing sentence and adds the apply --target hint", () => {
+      const msg = noMatch({ explicit: false, matcher: "DoesNotExist" });
+      expect(msg).toContain(listing);
+      expect(msg).toContain("`harness apply --target <file>`");
+      expect(msg).toContain("`harness gate disable --matcher DoesNotExist --settings <file>`");
+      expect(msg.indexOf(listing)).toBeLessThan(msg.indexOf("apply --target"));
+    });
+
+    it("explicit --settings: no hint, the operator already chose the file", () => {
+      const msg = noMatch({ explicit: true, matcher: "DoesNotExist" });
+      expect(msg).toContain(listing);
+      expect(msg).not.toContain("apply --target");
+      expect(msg).not.toContain("<file>");
+    });
+
+    it("quotes a matcher with shell-special characters in the hinted command", () => {
+      expect(noMatch({ explicit: false, matcher: "Write|Edit" })).toContain(
+        "--matcher 'Write|Edit' --settings <file>`",
+      );
+      expect(noMatch({ explicit: false, matcher: "it's" })).toContain(
+        "--matcher 'it'\\''s' --settings <file>`",
+      );
+    });
+  });
+
   it("drops the `hooks` key entirely when removal empties every event", () => {
     writeSettings({
       hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ command: "x" }] }] },
