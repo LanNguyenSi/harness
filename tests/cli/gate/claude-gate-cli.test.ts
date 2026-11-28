@@ -1217,3 +1217,30 @@ describe("harness gate (claude): a snapshot beside a settings path that became a
     expect(supersededSnapshotNames(aPath)).toHaveLength(1);
   });
 });
+
+describe("harness gate disable (claude): no-match hint", () => {
+  it("names the apply --target wiring when --settings was not given", async () => {
+    const home = path.join(tmp, "home");
+    fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+    fs.copyFileSync(settingsPath, path.join(home, ".claude", "settings.json"));
+    const saved = process.env["HOME"];
+    process.env["HOME"] = home;
+    try {
+      let stderr = "";
+      const code = await run({
+        argv: ["gate", "disable", "--matcher", "DoesNotExist"],
+        stdout: () => {},
+        stderr: (s) => {
+          stderr += s;
+        },
+      });
+      expect(code).toBe(EX_FAIL);
+      expect(stderr).toContain("no hook groups matched");
+      expect(stderr).toContain("`harness apply --target <file>`");
+      expect(stderr).toContain("--matcher DoesNotExist --settings <file>");
+    } finally {
+      if (saved === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = saved;
+    }
+  });
+});

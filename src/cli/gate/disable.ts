@@ -116,8 +116,8 @@ export class GateDisableError extends Error {
 }
 
 function resolveSettingsPath(opts: GateDisableOptions): string {
-  if (typeof opts.settingsPath === "string" && opts.settingsPath.length > 0) {
-    return opts.settingsPath;
+  if (settingsPathGiven(opts)) {
+    return opts.settingsPath as string;
   }
   const home = opts.homeDir ?? os.homedir();
   return path.join(home, DEFAULT_SETTINGS_REL);
@@ -299,7 +299,7 @@ export function gateDisable(opts: GateDisableOptions = {}): GateDisableResult {
   if (removed.length === 0) {
     throw new GateDisableError(
       `no hook groups matched matcher substring ${JSON.stringify(matcherPattern)} in ${settingsPath}. ` +
-        `Run \`harness gate disable ${settingsFlag(settingsPath)}\` (no --matcher) to list the available candidates.`,
+        `Run \`harness gate disable ${settingsFlag(settingsPath)}\` (no --matcher) to list the available candidates.` + applyTargetHint(opts, matcherPattern),
     );
   }
 
@@ -565,4 +565,22 @@ function chooseSnapshot(
     );
   }
   return { target: undefined, spent };
+}
+
+/**
+ * The extra sentence of the no-match error when no `--settings` was given: hooks wired with
+ * `harness apply --target <file>` live in that file, not in the default settings file searched.
+ * Empty when the operator already chose the file.
+ */
+function applyTargetHint(opts: GateDisableOptions, matcher: string): string {
+  if (settingsPathGiven(opts)) return "";
+  return (
+    ` Hooks wired with \`harness apply --target <file>\` live in that file, not here: ` +
+    `run \`harness gate disable --matcher ${shellQuote(matcher)} --settings <file>\`.`
+  );
+}
+
+/** Whether an explicit settings path was given; an empty string counts as not given. One predicate for the path choice and the hint. */
+function settingsPathGiven(opts: GateDisableOptions): boolean {
+  return typeof opts.settingsPath === "string" && opts.settingsPath.length > 0;
 }
